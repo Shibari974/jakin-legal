@@ -1,0 +1,12 @@
+:root { --bg: #faf8f3; --fg: #1d1b16; --muted: #6b665a; --accent: #9a7b2f; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #16150f; --fg: #ece8dc; --muted: #a39d8c; --accent: #d4b35f; }
+}
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 17px/1.6 Georgia, "Times New Roman", serif; }
+main { max-width: 640px; margin: 0 auto; padding: 48px 16px; }
+h1 { color: var(--accent); letter-spacing: .04em; }
+h2 { font-size: 1.1em; margin-top: 1.8em; }
+.date { color: var(--muted); font-size: .9em; }
+a { color: var(--accent); }
+nav { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 32px; }
