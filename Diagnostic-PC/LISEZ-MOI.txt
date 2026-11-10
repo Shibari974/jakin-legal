@@ -1,0 +1,58 @@
+﻿DIAGNOSTIC PC COMPLET (v2) - MODE D'EMPLOI
+==========================================
+
+Un seul outil qui remplace plusieurs petits logiciels (infos système, état des disques,
+benchmark, test de la RAM, test de charge du processeur...) et qui dit surtout
+CE QUE LE PC EST CAPABLE DE FAIRE.
+
+1) PRÉPARATION (une seule fois)
+   - Copie tout le dossier "Diagnostic-PC" sur une clé USB.
+   - Facultatif :
+     * CrystalDiskInfo (version Portable, crystalmark.info) : décompresse-le dans le dossier "CrystalDiskInfo".
+     * OCCT (ocbase.com) : mets le .exe dans le dossier "OCCT" (pour tester la carte graphique à la fin).
+
+2) SUR LE PC À TESTER
+   - Portable : branche le chargeur.
+   - Double-clic sur LANCER-DIAGNOSTIC.bat, accepte la demande "administrateur" (Oui).
+   - Si Windows affiche "Windows a protégé votre ordinateur" : "Informations complémentaires" puis "Exécuter quand même".
+   - Choisis tes usages (ex. : tape 3 7 9) ou Entrée pour tout évaluer.
+   - Entrée pour un test de charge de 5 minutes (ou tape 10 pour 10 minutes).
+   - Laisse tourner 15 à 20 minutes (l'écran peut clignoter pendant le benchmark Windows), puis réponds aux questions de la fin.
+
+3) LES 9 USAGES ÉVALUÉS (note sur 100 chacun)
+   1. Bureautique, internet, vidéos
+   2. Jeu en 1080p (Full HD)
+   3. Jeu en 1440p (QHD)
+   4. Jeu en 4K / réalité virtuelle
+   5. Streaming / création de contenu
+   6. Montage vidéo 1080p
+   7. Montage vidéo 4K / 360
+   8. 3D : Unreal Engine 5, Blender
+   9. IA en local (chatbot, génération d'images)
+
+   Lecture des notes :  85+ Excellent | 70+ Très bien  (VERT)
+                        50+ Correct                     (ORANGE)
+                        30+ Faible | en dessous Insuffisant (ROUGE)
+
+4) LE RAPPORT (s'ouvre dans le navigateur, enregistré dans "Rapports" en .html + .txt)
+   - PUISSANCE GLOBALE /100 : 100 = PC de très haut de gamme (RTX 5090, Ryzen 9 9950X, 64 Go).
+     Un petit PC gamer tourne autour de 40, un PC de bureautique autour de 20.
+   - SANTÉ /100 : disques (usure, heures, erreurs), écrans bleus, erreurs matérielles,
+     stabilité sous charge, température, batterie, traces de minage...
+   - VERDICT : conforme / conforme avec réserves / non conforme pour les usages choisis.
+   - Pour chaque usage en orange ou en rouge : ce qui limite (ex. "mémoire vidéo 8 Go, conseillé 12 Go"),
+     la pièce à changer (modèle conseillé) et la NOTE ESTIMÉE APRÈS l'amélioration.
+   - AMÉLIORATIONS CONSEILLÉES, classées par priorité : carte graphique, processeur compatible
+     avec la carte mère, barrette de RAM identique à ajouter, SSD, mais aussi les réglages gratuits
+     (profil XMP, nettoyage / pâte thermique, BIOS, pilotes).
+   - Les cas des PC portables sont gérés (processeur, carte graphique et parfois RAM soudés).
+
+5) À FAIRE À LA MAIN EN PLUS
+   - OCCT : test "3D Adaptive" 10 min pour la carte graphique.
+   - MemTest86 pour un test complet de la RAM (1 à 2 h).
+
+6) METTRE À JOUR LES MODÈLES
+   - Les cartes graphiques et processeurs connus sont listés en haut de diagnostic.ps1
+     (section "BASE DE DONNÉES"). Un nouveau modèle s'ajoute en une ligne.
+
+Le programme ne modifie rien sur le PC (juste un fichier temporaire de 2 Go, supprimé aussitôt).
