@@ -1,58 +1,74 @@
-﻿DIAGNOSTIC PC COMPLET (v2) - MODE D'EMPLOI
-==========================================
+﻿DIAGNOSTIC PC COMPLET (v2.1) - MODE D'EMPLOI
+============================================
 
 Un seul outil qui remplace plusieurs petits logiciels (infos système, état des disques,
-benchmark, test de la RAM, test de charge du processeur...) et qui dit surtout
-CE QUE LE PC EST CAPABLE DE FAIRE.
+benchmark processeur ET carte graphique, test de la RAM, test de charge, températures,
+test de clé USB...) et qui dit surtout CE QUE LE PC EST CAPABLE DE FAIRE.
+Fonctionne sur PC de bureau et PC portable, sous Windows 10 / 11.
 
 1) PRÉPARATION (une seule fois)
    - Copie tout le dossier "Diagnostic-PC" sur une clé USB.
+   - Conseillé : LibreHardwareMonitor (gratuit) pour les VRAIES températures
+     du processeur et de la carte graphique :
+       * télécharge le .zip sur github.com/LibreHardwareMonitor/LibreHardwareMonitor (rubrique Releases)
+       * décompresse TOUT son contenu dans le dossier "LibreHardwareMonitor"
+       * (sans lui, l'outil marche quand même, avec des températures approximatives ;
+          sur les cartes NVIDIA, la température est lue directement par le pilote)
    - Facultatif :
-     * CrystalDiskInfo (version Portable, crystalmark.info) : décompresse-le dans le dossier "CrystalDiskInfo".
-     * OCCT (ocbase.com) : mets le .exe dans le dossier "OCCT" (pour tester la carte graphique à la fin).
+     * CrystalDiskInfo (version Portable) dans le dossier "CrystalDiskInfo".
+     * OCCT dans le dossier "OCCT" (test de stabilité plus long si besoin).
 
 2) SUR LE PC À TESTER
-   - Portable : branche le chargeur.
+   - Portable : branche le chargeur et pose-le sur une table (aérations dégagées).
    - Double-clic sur LANCER-DIAGNOSTIC.bat, accepte la demande "administrateur" (Oui).
    - Si Windows affiche "Windows a protégé votre ordinateur" : "Informations complémentaires" puis "Exécuter quand même".
    - Choisis tes usages (ex. : tape 3 7 9) ou Entrée pour tout évaluer.
-   - Entrée pour un test de charge de 5 minutes (ou tape 10 pour 10 minutes).
-   - Laisse tourner 15 à 20 minutes (l'écran peut clignoter pendant le benchmark Windows), puis réponds aux questions de la fin.
+   - Entrée pour un test de charge processeur de 5 minutes (ou tape 10 pour 10 minutes).
+   - Laisse tourner environ 20 minutes. À l'étape 12, une fenêtre plein écran avec des motifs
+     qui bougent s'ouvre pendant 1 min 30 : c'est le test de la carte graphique, ne touche à rien.
+   - Réponds aux questions de la fin.
 
-3) LES 9 USAGES ÉVALUÉS (note sur 100 chacun)
-   1. Bureautique, internet, vidéos
-   2. Jeu en 1080p (Full HD)
-   3. Jeu en 1440p (QHD)
-   4. Jeu en 4K / réalité virtuelle
+3) LES 15 ÉTAPES
+   1-5   Windows, processeur, carte mère, RAM, carte graphique, écran, disques (usure, heures, erreurs)
+   6     Historique des pannes (écrans bleus, erreurs matérielles)
+   7-9   Benchmarks Windows, processeur (1 cœur / tous les cœurs), vitesse du disque
+   10    Test de la RAM
+   11    Test de charge du processeur (calculs vérifiés, fréquence, température)
+   12    TEST DE LA CARTE GRAPHIQUE : puissance mesurée, erreurs de calcul (artefacts),
+         perte de puissance en chauffant, température
+   13    Sécurité : BitLocker, antivirus, traces de minage, outils d'overclocking, périphériques
+   14    (facultatif) VRAIE CAPACITÉ d'une clé USB ou d'un disque externe : détecte les
+         contrefaçons (ex. "disque 128 To" à 25 euros qui ne fait en réalité que 64 Go).
+         Branche le disque à vérifier EN PLUS de la clé du diagnostic.
+         Mode rapide (jusqu'à 100 Go) ou complet. Sauvegarde ses fichiers avant.
+   15    Contrôles manuels : écran plein écran (pixels morts), bruit, ports USB, état physique
+
+4) LES 9 USAGES ÉVALUÉS (note sur 100 chacun)
+   1. Bureautique, internet, vidéos         6. Montage vidéo 1080p
+   2. Jeu en 1080p (Full HD)                7. Montage vidéo 4K / 360
+   3. Jeu en 1440p (QHD)                    8. 3D : Unreal Engine 5, Blender
+   4. Jeu en 4K / réalité virtuelle         9. IA en local (chatbot, génération d'images)
    5. Streaming / création de contenu
-   6. Montage vidéo 1080p
-   7. Montage vidéo 4K / 360
-   8. 3D : Unreal Engine 5, Blender
-   9. IA en local (chatbot, génération d'images)
 
    Lecture des notes :  85+ Excellent | 70+ Très bien  (VERT)
                         50+ Correct                     (ORANGE)
                         30+ Faible | en dessous Insuffisant (ROUGE)
 
-4) LE RAPPORT (s'ouvre dans le navigateur, enregistré dans "Rapports" en .html + .txt)
+5) LE RAPPORT (s'ouvre dans le navigateur, enregistré dans "Rapports" en .html + .txt)
    - PUISSANCE GLOBALE /100 : 100 = PC de très haut de gamme (RTX 5090, Ryzen 9 9950X, 64 Go).
      Un petit PC gamer tourne autour de 40, un PC de bureautique autour de 20.
-   - SANTÉ /100 : disques (usure, heures, erreurs), écrans bleus, erreurs matérielles,
-     stabilité sous charge, température, batterie, traces de minage...
+   - SANTÉ /100 : disques, pannes, stabilité du processeur ET de la carte graphique,
+     températures, batterie, traces de minage...
    - VERDICT : conforme / conforme avec réserves / non conforme pour les usages choisis.
-   - Pour chaque usage en orange ou en rouge : ce qui limite (ex. "mémoire vidéo 8 Go, conseillé 12 Go"),
-     la pièce à changer (modèle conseillé) et la NOTE ESTIMÉE APRÈS l'amélioration.
-   - AMÉLIORATIONS CONSEILLÉES, classées par priorité : carte graphique, processeur compatible
-     avec la carte mère, barrette de RAM identique à ajouter, SSD, mais aussi les réglages gratuits
-     (profil XMP, nettoyage / pâte thermique, BIOS, pilotes).
-   - Les cas des PC portables sont gérés (processeur, carte graphique et parfois RAM soudés).
-
-5) À FAIRE À LA MAIN EN PLUS
-   - OCCT : test "3D Adaptive" 10 min pour la carte graphique.
-   - MemTest86 pour un test complet de la RAM (1 à 2 h).
+   - Pour chaque usage en orange ou en rouge : ce qui limite, la pièce à changer
+     (modèle conseillé) et la NOTE ESTIMÉE APRÈS l'amélioration.
+   - AMÉLIORATIONS CONSEILLÉES, classées par priorité (pièces compatibles + réglages gratuits).
+   - Envoie le fichier .txt à Claude pour une analyse détaillée.
 
 6) METTRE À JOUR LES MODÈLES
    - Les cartes graphiques et processeurs connus sont listés en haut de diagnostic.ps1
      (section "BASE DE DONNÉES"). Un nouveau modèle s'ajoute en une ligne.
 
-Le programme ne modifie rien sur le PC (juste un fichier temporaire de 2 Go, supprimé aussitôt).
+Le programme ne modifie rien sur le PC : un fichier temporaire de 2 Go est écrit puis
+supprimé sur le disque C:, et le test de clé USB (étape 14) remplit puis vide l'espace
+libre du disque choisi uniquement.

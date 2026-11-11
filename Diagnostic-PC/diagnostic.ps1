@@ -1,24 +1,27 @@
 ﻿# =====================================================================
-#  DIAGNOSTIC PC COMPLET - v2
+#  DIAGNOSTIC PC COMPLET - v2.1
 #  Remplace plusieurs petits logiciels (infos système, SMART, benchmark,
 #  test RAM, test de charge...) et dit ce que le PC est capable de faire :
 #  bureautique, jeu 1080p / 1440p / 4K, streaming, montage vidéo, 3D,
 #  IA locale. Pour chaque usage : une note /100, un verdict, et ce qu’il
 #  faut changer pour l’améliorer (avec la note estimée après amélioration).
+#  v2.1 : vrai test de la carte graphique (puissance, erreurs de calcul,
+#  chauffe), vraies températures (LibreHardwareMonitor facultatif,
+#  nvidia-smi), test de vraie capacité des clés USB / disques externes.
 #
 #  Lancer via LANCER-DIAGNOSTIC.bat (droits administrateur).
 #  Ne modifie rien sur le PC. Seul un fichier temporaire de 2 Go est écrit
 #  puis supprimé pour mesurer la vitesse du disque.
 # =====================================================================
 $ErrorActionPreference = 'Continue'
-$VERSION = '2.0'
+$VERSION = '2.1'
 try { $Host.UI.RawUI.WindowTitle = 'Diagnostic PC' } catch {}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportDir = Join-Path $root 'Rapports'
 New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
 $stamp = Get-Date -Format 'yyyy-MM-dd_HH-mm'
 $reportPath = Join-Path $reportDir ("Diagnostic_{0}_{1}.html" -f $env:COMPUTERNAME, $stamp)
-$TOTAL = 13
+$TOTAL = 15
 
 # =====================================================================
 #  BASE DE DONNÉES (à mettre à jour quand de nouveaux modèles sortent)
@@ -200,6 +203,64 @@ function Get-Level([double]$s) {
 }
 
 # ---------------------------------------------------------------------
+#  Capteurs : LibreHardwareMonitor (facultatif, vraies températures)
+#  et nvidia-smi (installé avec le pilote NVIDIA)
+# ---------------------------------------------------------------------
+$lhm = $null; $lhmCpuOk = $false
+function Init-Lhm {
+    $dir = Join-Path $root 'LibreHardwareMonitor'
+    $dll = Get-ChildItem $dir -Recurse -Filter 'LibreHardwareMonitorLib.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $dll) { Write-Host '   (LibreHardwareMonitor absent : températures approximatives)' -ForegroundColor DarkGray; return }
+    try {
+        Get-ChildItem $dll.DirectoryName -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
+        Add-Type -Path $dll.FullName -ErrorAction Stop
+        $cp = New-Object LibreHardwareMonitor.Hardware.Computer
+        foreach ($p in 'IsCpuEnabled', 'IsGpuEnabled', 'IsMotherboardEnabled') { try { $cp.$p = $true } catch {} }
+        $cp.Open()
+        $script:lhm = $cp
+        $t0 = Read-Lhm
+        $script:lhmCpuOk = ($null -ne $t0.Cpu)
+        Write-Host "   LibreHardwareMonitor chargé (temp. processeur : $(if ($t0.Cpu) { "$([int]$t0.Cpu) C" } else { 'non lisible' }), carte graphique : $(if ($t0.Gpu) { "$([int]$t0.Gpu) C" } else { 'non lisible' }))." -ForegroundColor DarkGray
+    } catch { Write-Host "   LibreHardwareMonitor n’a pas pu démarrer : $($_.Exception.Message)" -ForegroundColor DarkGray }
+}
+function Read-Lhm {
+    $o = [pscustomobject]@{ Cpu = $null; CpuPower = $null; Gpu = $null; GpuHot = $null }
+    if (-not $script:lhm) { return $o }
+    try {
+        foreach ($hw in $script:lhm.Hardware) {
+            $hw.Update()
+            foreach ($sub in $hw.SubHardware) { $sub.Update() }
+            $ht = "$($hw.HardwareType)"
+            foreach ($h in @($hw) + @($hw.SubHardware)) {
+                foreach ($s in $h.Sensors) {
+                    if ($null -eq $s.Value) { continue }
+                    $st = "$($s.SensorType)"; $nm = "$($s.Name)"; $v = [double]$s.Value
+                    if ($st -eq 'Temperature' -and ($v -le 0 -or $v -gt 125)) { continue }
+                    if ($ht -eq 'Cpu' -and $st -eq 'Temperature' -and $nm -match 'Package|Tctl|Tdie|Core Max|CPU') { if ($null -eq $o.Cpu -or $v -gt $o.Cpu) { $o.Cpu = $v } }
+                    elseif ($ht -eq 'Cpu' -and $st -eq 'Power' -and $nm -match 'Package') { $o.CpuPower = $v }
+                    elseif ($ht -match '^Gpu' -and $st -eq 'Temperature') {
+                        if ($nm -match 'Hot ?Spot') { $o.GpuHot = $v }
+                        elseif ($nm -match 'Core|GPU') { if ($null -eq $o.Gpu -or $v -gt $o.Gpu) { $o.Gpu = $v } }
+                    }
+                }
+            }
+        }
+    } catch {}
+    $o
+}
+$smi = @("$env:windir\System32\nvidia-smi.exe", "$env:ProgramFiles\NVIDIA Corporation\NVSMI\nvidia-smi.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+function ToD($s) { $d = 0.0; if ([double]::TryParse(("" + $s).Trim(), [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$d)) { return $d }; return $null }
+function Get-NvSample {
+    if (-not $smi) { return $null }
+    try {
+        $l = & $smi --query-gpu=temperature.gpu,utilization.gpu,clocks.gr,power.draw --format=csv,noheader,nounits 2>$null | Select-Object -First 1
+        $p = ("" + $l) -split ','
+        if ($p.Count -lt 3) { return $null }
+        return [pscustomobject]@{ Temp = (ToD $p[0]); Util = (ToD $p[1]); Clock = (ToD $p[2]); Power = $(if ($p.Count -gt 3) { ToD $p[3] } else { $null }) }
+    } catch { return $null }
+}
+
+# ---------------------------------------------------------------------
 #  Identification du processeur : indice 1 cœur (100 = le plus rapide du marché)
 # ---------------------------------------------------------------------
 function Get-CpuInfo([string]$name, [bool]$laptop) {
@@ -314,6 +375,8 @@ $selected = @($selected | Sort-Object -Unique)
 $ans = Read-Host 'Durée du test de charge processeur en minutes (Entrée = 5)'
 $stressMin = 5
 if ($ans -match '^\d+$' -and [int]$ans -ge 1) { $stressMin = [int]$ans }
+Write-Host ''
+Init-Lhm
 
 # ---------------------------------------------------------------- 1
 Step 1 'Windows (version, activation)'
@@ -444,6 +507,10 @@ foreach ($g in @(Get-CimInstance Win32_VideoController)) {
     $gpus += [pscustomobject]$info
 }
 $mainGpu = $gpus | Sort-Object { [double]$_.G } -Descending | Select-Object -First 1
+if ($smi -and $mainGpu -and $mainGpu.Vendor -eq 'NVIDIA') {
+    # mémoire vidéo exacte donnée par le pilote NVIDIA
+    try { $mt = ToD (& $smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1); if ($mt -gt 0) { $mainGpu.V = [math]::Round($mt / 1024, 1) } } catch {}
+}
 $gpuRows = foreach ($g in $gpus) {
     [pscustomobject]@{
         'Carte'          = $g.Name
@@ -819,8 +886,9 @@ if ($benchOk) {
         $load = $null; $freq = $null; $temp = $null
         try { $load = (Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'").PercentProcessorTime } catch {}
         try { $perf = (Get-CimInstance Win32_PerfFormattedData_Counters_ProcessorInformation -Filter "Name='_Total'").PercentProcessorPerformance; $freq = [int]($cpu.MaxClockSpeed * $perf / 100) } catch {}
-        try { $tz = Get-CimInstance -Namespace root\wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop | Select-Object -First 1; $temp = [math]::Round($tz.CurrentTemperature / 10 - 273.15) } catch {}
-        if (-not $temp) { try { $tz = Get-CimInstance Win32_PerfFormattedData_Counters_ThermalZoneInformation -ErrorAction Stop | Select-Object -First 1; if ($tz.HighPrecisionTemperature) { $temp = [math]::Round($tz.HighPrecisionTemperature / 10 - 273.15) } } catch {} }
+        if ($lhmCpuOk) { $lt = Read-Lhm; if ($lt.Cpu) { $temp = [math]::Round($lt.Cpu) } }
+        if (-not $temp -and -not $lhmCpuOk) { try { $tz = Get-CimInstance -Namespace root\wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop | Select-Object -First 1; $temp = [math]::Round($tz.CurrentTemperature / 10 - 273.15) } catch {} }
+        if (-not $temp -and -not $lhmCpuOk) { try { $tz = Get-CimInstance Win32_PerfFormattedData_Counters_ThermalZoneInformation -ErrorAction Stop | Select-Object -First 1; if ($tz.HighPrecisionTemperature) { $temp = [math]::Round($tz.HighPrecisionTemperature / 10 - 273.15) } } catch {} }
         $el = [int]((Get-Date) - $start).TotalSeconds
         $samples.Add([pscustomobject]@{ T = $el; Charge = $load; MHz = $freq; Temp = $temp })
         Write-Progress -Activity 'Test de charge processeur' -Status "Charge $load %  |  $freq MHz  |  temp. capteur : $temp C" -PercentComplete ([math]::Min(100, 100 * $el / $seconds))
@@ -838,16 +906,192 @@ Add-Table 'Test de charge processeur' ([ordered]@{
     'Calculs vérifiés'               = "$okTot corrects / $badTot faux"
     'Charge moyenne'                 = "$avgLoad %"
     'Fréquence début / fin de test'  = "$([int]$firstF) / $([int]$lastF) MHz"
-    'Temp. max (capteur ACPI, indicatif)' = $(if ($maxT) { "$maxT C" } else { 'non disponible (voir OCCT)' })
+    'Température max du processeur' = $(if ($maxT) { "$maxT C $(if ($lhmCpuOk) { '(capteur du processeur)' } else { '(capteur ACPI, indicatif)' })" } else { 'non disponible (ajouter LibreHardwareMonitor)' })
 })
 if ($benchOk) {
     if ($badTot -gt 0) { Add-Alert ROUGE "Processeur instable : $badTot calcul(s) faux sous charge." 50 } else { Add-Alert OK "Processeur stable : $okTot blocs de calcul vérifiés sans erreur." }
 }
 if ($freqDrop) { Add-Alert ORANGE "La fréquence chute de $([int]$firstF) à $([int]$lastF) MHz sous charge (surchauffe probable)." 10 }
-if ($maxT -and $maxT -gt 95) { Add-Alert ROUGE "Température mesurée $maxT C." 15 } elseif ($maxT -and $maxT -gt 90) { Add-Alert ORANGE "Température mesurée $maxT C." 8 }
+if ($maxT -and $lhmCpuOk) {
+    # vraie température du processeur (certains processeurs récents montent volontairement à 95 C)
+    if ($maxT -ge 100) { Add-Alert ROUGE "Processeur à $maxT C sous charge : il atteint sa limite et se bride (refroidissement insuffisant)." 15 }
+    elseif ($maxT -ge 95) { Add-Alert ORANGE "Processeur à $maxT C sous charge : très chaud (normal pour certains Ryzen 7000/9000 et Core i9, sinon refroidissement à revoir)." 5 }
+    else { Add-Alert OK "Température du processeur sous charge : $maxT C." }
+} elseif ($maxT -and $maxT -gt 95) { Add-Alert ORANGE "Température mesurée $maxT C (capteur ACPI, indicatif)." 5 }
 
 # ---------------------------------------------------------------- 12
-Step 12 'Sécurité, logiciels suspects (minage, overclocking), périphériques'
+Step 12 'Test de la carte graphique (puissance, stabilité, chauffe) - 2 min'
+Write-Host '   Une fenêtre plein écran va s’ouvrir avec des motifs qui bougent. Ne touchez à rien.' -ForegroundColor DarkGray
+$gpuSec = 90
+$gpuHtml = @'
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Test carte graphique</title>
+<style>html,body{margin:0;height:100%;background:#111;color:#eee;font:16px Segoe UI,Arial,sans-serif;overflow:hidden}
+canvas{width:100vw;height:100vh;display:block}#hud{position:fixed;left:16px;top:12px;background:rgba(0,0,0,.65);padding:10px 14px;border-radius:8px;line-height:1.5}</style></head>
+<body><canvas id="c"></canvas><div id="hud">Test de la carte graphique en cours : ne touchez à rien...</div>
+<script>
+(async function () {
+  const DURATION = __DURATION__;
+  const hud = document.getElementById('hud');
+  const res = { ok: false, renderer: '', vendor: '', windows: [], errors: 0, checks: 0, lost: false, msg: '' };
+  const send = (path, obj) => fetch(path, { method: 'POST', body: JSON.stringify(obj) }).catch(() => {});
+  try {
+    const cv = document.getElementById('c'); cv.width = 1024; cv.height = 1024;
+    const gl = cv.getContext('webgl2', { powerPreference: 'high-performance', antialias: false, depth: false });
+    if (!gl) { res.msg = 'WebGL2 indisponible'; await send('/result', res); hud.textContent = res.msg; return; }
+    cv.addEventListener('webglcontextlost', e => { res.lost = true; e.preventDefault(); });
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    res.renderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    res.vendor = dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
+    const vs = '#version 300 es\nin vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }';
+    const fs = '#version 300 es\nprecision highp float; uniform int it; uniform float seed; out vec4 o;\n' +
+      'void main(){ vec4 a = vec4(gl_FragCoord.xy * 0.000977, seed, 0.5);\n' +
+      ' for (int i = 0; i < it; i++) { a = fract(a * 1.0013 + sin(a.yzwx * 3.17 + float(i) * 0.013) * 0.71); }\n' +
+      ' o = a; }';
+    const mk = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+    const pr = gl.createProgram(); gl.attachShader(pr, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(pr, mk(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(pr); gl.useProgram(pr);
+    const vb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(pr, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    const uIt = gl.getUniformLocation(pr, 'it'), uSeed = gl.getUniformLocation(pr, 'seed');
+    const target = (w, h) => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
+      const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0); return f; };
+    const W = 1024, H = 1024, big = target(W, H), small = target(64, 64);
+    const px = new Uint8Array(4), chk = new Uint8Array(64 * 64 * 4);
+    const run = (n, it) => { gl.bindFramebuffer(gl.FRAMEBUFFER, big); gl.viewport(0, 0, W, H); gl.uniform1i(uIt, it);
+      for (let k = 0; k < n; k++) { gl.uniform1f(uSeed, (k % 7) * 0.1); gl.drawArrays(gl.TRIANGLES, 0, 3); }
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); };   // attend la fin du calcul
+    const check = () => { gl.bindFramebuffer(gl.FRAMEBUFFER, small); gl.viewport(0, 0, 64, 64); gl.uniform1i(uIt, 3000);
+      gl.uniform1f(uSeed, 0.37); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, chk); return chk; };
+    const show = () => { gl.bindFramebuffer(gl.READ_FRAMEBUFFER, big); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+      gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST); };
+    const ch = new MessageChannel(); const yieldNow = () => new Promise(r => { ch.port1.onmessage = () => r(); ch.port2.postMessage(0); });
+    // calibrage : chaque paquet de calcul doit durer environ 50 ms
+    let it = 128, n = 1;
+    for (;;) { const t0 = performance.now(); run(n, it); const dt = performance.now() - t0;
+      if (dt > 30) { n = Math.max(1, Math.round(n * 50 / dt)); break; }
+      if (it < 16384) it *= 2; else if (n < 100000) n *= 2; else break; }
+    const ref = check().slice();
+    const start = performance.now(); let winStart = start, winWork = 0, lastChk = start;
+    while (performance.now() - start < DURATION * 1000 && !res.lost) {
+      const t0 = performance.now(); run(n, it); const dt = performance.now() - t0; winWork += n * it;
+      if (dt > 0) n = Math.max(1, Math.min(n * 2, Math.round(n * 50 / dt)));
+      const now = performance.now();
+      if (now - lastChk > 2000) { const c = check(); let bad = 0; for (let i = 0; i < c.length; i++) if (c[i] !== ref[i]) bad++;
+        res.checks++; if (bad) res.errors++; lastChk = now; }
+      if (now - winStart >= 5000) {
+        const g = winWork * W * H / ((now - winStart) / 1000) / 1e9; res.windows.push(Math.round(g * 10) / 10);
+        winWork = 0; winStart = now; show();
+        const el = Math.round((now - start) / 1000);
+        hud.innerHTML = 'Test de la carte graphique : ' + el + ' / ' + DURATION + ' s<br>Puissance : ' + g.toFixed(1) +
+          ' G ops/s<br>Vérifications : ' + res.checks + ', erreurs : ' + res.errors + '<br><small>' + res.renderer + '</small>';
+        send('/progress', { t: el, g: g, e: res.errors });
+      }
+      await yieldNow();
+    }
+    res.ok = !res.lost && res.windows.length > 0;
+  } catch (e) { res.msg = String(e && e.message || e); }
+  await send('/result', res);
+  hud.innerHTML = 'Test terminé. Cette fenêtre va se fermer.';
+})();
+</script></body></html>
+'@
+$gpuHtml = $gpuHtml.Replace('__DURATION__', "$gpuSec")
+$gpuRes = $null; $gpuSamples = New-Object System.Collections.Generic.List[object]
+$udd = Join-Path $env:TEMP 'diag-gpu-navigateur'
+$listener = $null
+try {
+    $listener = New-Object System.Net.HttpListener
+    $port = Get-Random -Minimum 49200 -Maximum 49900
+    $listener.Prefixes.Add("http://localhost:$port/")
+    $listener.Start()
+    $url = "http://localhost:$port/"
+    $edge = @("${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe", "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe") | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+    if ($edge) {
+        # instance séparée du navigateur, forcée sur la carte graphique la plus puissante
+        Start-Process -FilePath $edge -ArgumentList "--user-data-dir=`"$udd`" --no-first-run --no-default-browser-check --force_high_performance_gpu --disable-background-timer-throttling --disable-renderer-backgrounding --start-fullscreen --app=$url"
+    } else { Start-Process $url }
+    $deadline = (Get-Date).AddSeconds($gpuSec + 90)
+    $t0 = Get-Date; $lastSample = Get-Date
+    while (-not $gpuRes -and (Get-Date) -lt $deadline) {
+        $task = $listener.GetContextAsync()
+        while (-not $task.Wait(1000)) {
+            if (((Get-Date) - $lastSample).TotalSeconds -ge 3) {
+                $lastSample = Get-Date
+                $nv = Get-NvSample; $lt = Read-Lhm
+                $gt = $null; if ($nv -and $nv.Temp) { $gt = $nv.Temp } elseif ($lt.Gpu) { $gt = $lt.Gpu }
+                $gpuSamples.Add([pscustomobject]@{ T = [int]((Get-Date) - $t0).TotalSeconds; Temp = $gt; Hot = $lt.GpuHot; Util = $(if ($nv) { $nv.Util }); Clock = $(if ($nv) { $nv.Clock }); Power = $(if ($nv) { $nv.Power }) })
+            }
+            if ((Get-Date) -gt $deadline) { break }
+        }
+        if (-not $task.IsCompleted) { break }
+        $ctx = $task.Result; $req = $ctx.Request; $resp = $ctx.Response
+        $path = $req.Url.AbsolutePath
+        if ($req.HttpMethod -eq 'GET') {
+            if ($path -eq '/') { $bytes = [Text.Encoding]::UTF8.GetBytes($gpuHtml); $resp.ContentType = 'text/html; charset=utf-8'; $resp.OutputStream.Write($bytes, 0, $bytes.Length) }
+            else { $resp.StatusCode = 404 }
+        } else {
+            $body = (New-Object IO.StreamReader($req.InputStream, [Text.Encoding]::UTF8)).ReadToEnd()
+            if ($path -eq '/result') { $gpuRes = $body | ConvertFrom-Json }
+            elseif ($path -eq '/progress') {
+                try { $pg = $body | ConvertFrom-Json; $lastS = $gpuSamples | Select-Object -Last 1
+                    Write-Progress -Activity 'Test carte graphique' -Status ("{0:N1} G ops/s | erreurs : {1} | temp. : {2} C" -f $pg.g, $pg.e, $(if ($lastS) { $lastS.Temp } else { '?' })) -PercentComplete ([math]::Min(100, 100 * $pg.t / $gpuSec)) } catch {}
+            }
+        }
+        $resp.Close()
+    }
+} catch { Write-Host "   Test de la carte graphique impossible : $($_.Exception.Message)" -ForegroundColor Yellow }
+finally {
+    Write-Progress -Activity 'Test carte graphique' -Completed
+    if ($listener) { try { $listener.Stop(); $listener.Close() } catch {} }
+    Start-Sleep -Seconds 1
+    Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*diag-gpu-navigateur*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+$gpuScore = $null; $gpuDrop = $null; $gpuOnMain = $true
+$gpuMaxT = ($gpuSamples | Where-Object { $_.Temp } | Measure-Object -Property Temp -Maximum).Maximum
+$gpuMaxHot = ($gpuSamples | Where-Object { $_.Hot } | Measure-Object -Property Hot -Maximum).Maximum
+$gpuUtil = ($gpuSamples | Where-Object { $null -ne $_.Util -and $_.T -gt 15 } | Measure-Object -Property Util -Average).Average
+if ($gpuRes) {
+    $wins = @($gpuRes.windows | ForEach-Object { [double]$_ })
+    if ($wins.Count -ge 2) {
+        $sorted = @($wins | Sort-Object); $gpuScore = [math]::Round($sorted[[int][math]::Floor($sorted.Count / 2)], 1)
+        $peak = ($wins | Select-Object -First 4 | Measure-Object -Maximum).Maximum
+        $end = ($wins | Select-Object -Last 3 | Measure-Object -Average).Average
+        if ($peak -gt 0) { $gpuDrop = [int][math]::Round(100 * (1 - $end / $peak)) }
+    }
+    # le navigateur a-t-il bien utilisé la carte graphique principale ?
+    if ($mainGpu -and -not $mainGpu.Igpu) {
+        $rd = ("" + $gpuRes.renderer).ToUpper()
+        $want = @{ NVIDIA = 'NVIDIA|GEFORCE|RTX|GTX'; AMD = 'AMD|RADEON'; Intel = 'INTEL|ARC' }[$mainGpu.Vendor]
+        if ($want -and $rd -and $rd -notmatch $want) { $gpuOnMain = $false }
+    }
+    Add-Table 'Test de la carte graphique (WebGL, 90 s)' ([ordered]@{
+        'Carte utilisée par le test'   = $gpuRes.renderer
+        'Puissance mesurée'            = $(if ($gpuScore) { "$gpuScore G ops/s (médiane)" } else { 'non mesurée' })
+        'Évolution pendant le test'    = $(if ($wins.Count) { ($wins -join ' / ') + ' G ops/s' } else { '' })
+        'Chute de performance (chauffe)' = $(if ($null -ne $gpuDrop) { "$gpuDrop %" } else { '?' })
+        'Vérifications de calcul'      = "$($gpuRes.checks) dont $($gpuRes.errors) en erreur"
+        'Température max'              = $(if ($gpuMaxT) { "$gpuMaxT C$(if ($gpuMaxHot) { " (point chaud $gpuMaxHot C)" })" } else { 'non lisible (ajouter LibreHardwareMonitor)' })
+        'Utilisation de la carte'      = $(if ($gpuUtil) { "$([int]$gpuUtil) %" } else { 'non lisible' })
+        'Plantage du pilote'           = $(if ($gpuRes.lost) { 'OUI' } else { 'non' })
+    })
+    Write-Host "   Carte : $($gpuRes.renderer)"
+    Write-Host "   Puissance : $gpuScore G ops/s | chute : $gpuDrop % | erreurs : $($gpuRes.errors)/$($gpuRes.checks) | temp. max : $gpuMaxT C"
+    if ($gpuRes.lost) { Add-Alert ROUGE 'Le pilote de la carte graphique a planté pendant le test (carte instable, surchauffe ou pilote défectueux).' 25 }
+    elseif ($gpuRes.errors -gt 0) { Add-Alert ROUGE "Carte graphique instable : $($gpuRes.errors) vérification(s) de calcul fausse(s) sur $($gpuRes.checks) (artefacts, mémoire vidéo ou overclocking)." 30 }
+    elseif ($gpuRes.ok) { Add-Alert OK "Carte graphique stable : $($gpuRes.checks) vérifications de calcul sans erreur." }
+    if (-not $gpuRes.ok -and $gpuRes.msg) { Add-Alert INFO "Test de la carte graphique incomplet : $($gpuRes.msg)" }
+    if (-not $gpuOnMain) { Add-Alert INFO "Le navigateur a utilisé « $($gpuRes.renderer) » au lieu de la carte principale : la puissance mesurée concerne la puce intégrée." }
+    if ($gpuOnMain -and $null -ne $gpuDrop -and $gpuDrop -ge 20) { Add-Alert ORANGE "La carte graphique perd $gpuDrop % de puissance en chauffant (ventilateurs encrassés ou pâte thermique sèche)." 8 }
+    if ($gpuMaxHot -and $gpuMaxHot -ge 105) { Add-Alert ROUGE "Point chaud de la carte graphique à $gpuMaxHot C." 10 }
+    if ($gpuMaxT -and $gpuMaxT -ge 90) { Add-Alert ROUGE "Carte graphique à $gpuMaxT C : beaucoup trop chaude." 10 }
+    elseif ($gpuMaxT -and $gpuMaxT -ge 84) { Add-Alert ORANGE "Carte graphique à $gpuMaxT C : chaude." 4 }
+} else { Write-Host '   Pas de résultat du test de la carte graphique.' -ForegroundColor Yellow; Add-Alert INFO 'Test de la carte graphique non réalisé : faire un test OCCT à la main.' }
+
+# ---------------------------------------------------------------- 13
+Step 13 'Sécurité, logiciels suspects (minage, overclocking), périphériques'
 $bl = $null; try { $bl = Get-BitLockerVolume -MountPoint 'C:' -ErrorAction Stop } catch {}
 $tpm = $null; try { $tpm = Get-Tpm -ErrorAction Stop } catch {}
 $sb = $null; try { $sb = Confirm-SecureBootUEFI -ErrorAction Stop } catch {}
@@ -907,8 +1151,138 @@ Add-Table 'Autres périphériques' ([ordered]@{
     'Contrôleurs USB' = @(Get-CimInstance Win32_USBController -ErrorAction SilentlyContinue).Count
 })
 
-# ---------------------------------------------------------------- 13
-Step 13 'Contrôles manuels (écran, bruit, ports, état physique)'
+# ---------------------------------------------------------------- 14
+Step 14 'Clé USB / disque externe : vraie capacité (facultatif)'
+$extRes = $null
+$toolLetter = $root.Substring(0, 1).ToUpper()
+$usbNums = @(Get-Disk -ErrorAction SilentlyContinue | Where-Object { "$($_.BusType)" -eq 'USB' } | ForEach-Object { [int]$_.Number })
+$extVols = @()
+foreach ($v in @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -and $_.Size -gt 0 })) {
+    $L = "$($v.DriveLetter)".ToUpper()
+    if ($L -eq $toolLetter -or $L -eq 'C') { continue }
+    $isUsb = ("$($v.DriveType)" -eq 'Removable')
+    if (-not $isUsb) { try { $isUsb = $usbNums -contains [int](Get-Partition -DriveLetter $L -ErrorAction Stop | Select-Object -First 1).DiskNumber } catch {} }
+    if ($isUsb) { $extVols += $v }
+}
+if ($extVols.Count -eq 0) {
+    Write-Host '   Aucune autre clé USB ni disque externe branché : étape sautée.' -ForegroundColor DarkGray
+    Write-Host '   (Pour vérifier un disque acheté en ligne, branche-le en plus de cette clé et relance le diagnostic.)' -ForegroundColor DarkGray
+} else {
+    Write-Host '   Ce test vérifie qu’une clé ou un disque externe a vraiment la capacité annoncée (détecte les contrefaçons).'
+    foreach ($v in $extVols) { Write-Host ("   {0}:  {1,-20} annoncé {2} Go, libre {3} Go, {4}" -f $v.DriveLetter, $v.FileSystemLabel, (GB $v.Size), (GB $v.SizeRemaining), $v.FileSystem) }
+    $pick = (Read-Host '   Lettre du disque à tester (ex : E), ou Entrée pour passer').Trim().TrimEnd(':').ToUpper()
+    $vol = $extVols | Where-Object { "$($_.DriveLetter)".ToUpper() -eq $pick } | Select-Object -First 1
+    if ($vol) {
+        Write-Host '   ATTENTION : sur un disque contrefait, ce test peut abîmer les fichiers déjà présents. Copie-les ailleurs avant.' -ForegroundColor Yellow
+        $mode = Read-Host '   1 = rapide (écrit jusqu’à 100 Go, détecte la plupart des contrefaçons)   2 = complet (tout l’espace libre)   Entrée = annuler'
+        if ($mode -match '^[12]$') {
+            $capCode = @'
+using System;
+using System.IO;
+public static class CapCheck {
+    static byte[] _base;
+    public static void Init(int size) { _base = new byte[size]; new Random(1234).NextBytes(_base); }
+    // remplit le bloc et y inscrit tous les 64 Ko un repère unique (fichier, bloc, position)
+    public static void Stamp(byte[] buf, int file, int block) {
+        Buffer.BlockCopy(_base, 0, buf, 0, _base.Length);
+        for (int o = 0; o + 16 <= buf.Length; o += 65536) {
+            BitConverter.GetBytes(0x44494147).CopyTo(buf, o);
+            BitConverter.GetBytes(file).CopyTo(buf, o + 4);
+            BitConverter.GetBytes(block).CopyTo(buf, o + 8);
+            BitConverter.GetBytes(o).CopyTo(buf, o + 12);
+        }
+    }
+    public static bool Same(byte[] a, int n, byte[] b) {
+        if (n != b.Length) return false;
+        for (int i = 0; i < n; i++) if (a[i] != b[i]) return false;
+        return true;
+    }
+    public static int ReadFull(Stream s, byte[] b) {
+        int t = 0;
+        while (t < b.Length) { int r = s.Read(b, t, b.Length - t); if (r <= 0) break; t += r; }
+        return t;
+    }
+}
+'@
+            try {
+                if (-not ('CapCheck' -as [type])) { Add-Type -TypeDefinition $capCode -ErrorAction Stop }
+                $L = "$($vol.DriveLetter)".ToUpper()
+                $blk = 8MB; $perFile = 128          # fichiers de 1 Go
+                [CapCheck]::Init($blk)
+                $buf = New-Object byte[] $blk
+                $usedBefore = [double]$vol.Size - [double]$vol.SizeRemaining
+                $limit = [double]$vol.SizeRemaining - 256MB
+                if ($mode -eq '1') { $limit = [math]::Min($limit, 100GB) }
+                $files = New-Object System.Collections.Generic.List[object]
+                $written = 0.0; $fi = 0; $stop = $false; $writeErr = $false
+                Write-Host '   Écriture en cours (Échap pour arrêter et vérifier ce qui a déjà été écrit)...' -ForegroundColor DarkGray
+                $sw = [Diagnostics.Stopwatch]::StartNew()
+                while (-not $stop -and $written + $blk -le $limit) {
+                    $fi++
+                    $path = "${L}:\DIAGCAP_{0:D5}.bin" -f $fi
+                    $nb = [int][math]::Min($perFile, [math]::Floor(($limit - $written) / $blk))
+                    $fs = $null; $done = 0
+                    try {
+                        $fs = New-Object IO.FileStream($path, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None, 1MB, [IO.FileOptions]::WriteThrough)
+                        for ($bi = 0; $bi -lt $nb; $bi++) {
+                            [CapCheck]::Stamp($buf, $fi, $bi); $fs.Write($buf, 0, $blk); $written += $blk; $done++
+                            if ($bi % 8 -eq 0) {
+                                $sp = $written / 1MB / [math]::Max(1, $sw.Elapsed.TotalSeconds)
+                                $rest = ($limit - $written) / 1MB / [math]::Max(1, $sp)
+                                Write-Progress -Activity "Test de capacité ${L}:" -Status ("Écrit {0:N1} Go sur {1:N1} Go - {2:N0} Mo/s - reste environ {3:N0} min" -f ($written / 1GB), ($limit / 1GB), $sp, ($rest / 60)) -PercentComplete ([math]::Min(100, 100 * $written / $limit))
+                                try { if ([Console]::KeyAvailable -and [Console]::ReadKey($true).Key -eq 'Escape') { $stop = $true; break } } catch {}
+                            }
+                        }
+                    } catch { $writeErr = $true; $stop = $true }
+                    finally { if ($fs) { try { $fs.Close() } catch {} } }
+                    $files.Add([pscustomobject]@{ Path = $path; File = $fi; Blocks = $done })
+                }
+                $writeMBs2 = [int]($written / 1MB / [math]::Max(0.1, $sw.Elapsed.TotalSeconds))
+                # vider le cache de Windows pour relire réellement le disque
+                & fsutil volume dismount "${L}:" 2>&1 | Out-Null
+                Start-Sleep -Seconds 3
+                $exp = New-Object byte[] $blk; $rb = New-Object byte[] $blk
+                $goodB = 0.0; $badB = 0.0; $firstBad = $null; $pos = 0.0
+                $sw = [Diagnostics.Stopwatch]::StartNew()
+                foreach ($f in $files) {
+                    $fs = $null; $bi = 0
+                    try {
+                        $fs = New-Object IO.FileStream($f.Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read, 1MB, [IO.FileOptions]::SequentialScan)
+                        for ($bi = 0; $bi -lt $f.Blocks; $bi++) {
+                            $n = [CapCheck]::ReadFull($fs, $rb); [CapCheck]::Stamp($exp, $f.File, $bi)
+                            if ([CapCheck]::Same($rb, $n, $exp)) { $goodB += $blk } else { $badB += $blk; if ($null -eq $firstBad) { $firstBad = $pos } }
+                            $pos += $blk
+                            if ($bi % 8 -eq 0) { Write-Progress -Activity "Test de capacité ${L}:" -Status ("Vérification {0:N1} Go sur {1:N1} Go" -f ($pos / 1GB), ($written / 1GB)) -PercentComplete ([math]::Min(100, 100 * $pos / [math]::Max(1, $written))) }
+                        }
+                    } catch {
+                        $left = $f.Blocks - $bi; $badB += $left * $blk; if ($null -eq $firstBad) { $firstBad = $pos }; $pos += $left * $blk
+                    } finally { if ($fs) { try { $fs.Close() } catch {} } }
+                }
+                $readMBs2 = [int]($pos / 1MB / [math]::Max(0.1, $sw.Elapsed.TotalSeconds))
+                Write-Progress -Activity "Test de capacité ${L}:" -Completed
+                foreach ($f in $files) { Remove-Item $f.Path -Force -ErrorAction SilentlyContinue }
+                $announced = GB $vol.Size
+                if ($badB -gt 0 -or $writeErr) {
+                    $realGB = GB ($usedBefore + $(if ($null -ne $firstBad) { $firstBad } else { $written }))
+                    $verdict = "CONTREFAÇON PROBABLE : capacité réelle d’environ $realGB Go au lieu des $announced Go annoncés. Les fichiers copiés au-delà seront perdus. Demande le remboursement."
+                    $cls = 'r'
+                } elseif ($written -ge [double]$vol.SizeRemaining - 1GB) {
+                    $verdict = "CAPACITÉ AUTHENTIQUE : tout l’espace libre ($(GB $written) Go) a été écrit et relu sans erreur."
+                    $cls = 'g'
+                } else {
+                    $verdict = "Aucune anomalie sur les $(GB $written) Go testés (test partiel : une contrefaçon plus grande ne serait pas détectée, faire le test complet pour être sûr)."
+                    $cls = 'o'
+                }
+                $extRes = [pscustomobject]@{ Letter = $L; Label = $vol.FileSystemLabel; Announced = $announced; Tested = (GB $written); Bad = (GB $badB); Write = $writeMBs2; Read = $readMBs2; Verdict = $verdict; Cls = $cls }
+                Write-Host "   $verdict" -ForegroundColor (@{ g = 'Green'; o = 'Yellow'; r = 'Red' }[$cls])
+                Write-Host "   Vitesse : écriture $writeMBs2 Mo/s, lecture $readMBs2 Mo/s"
+            } catch { Write-Host "   Test de capacité impossible : $($_.Exception.Message)" -ForegroundColor Yellow }
+        }
+    }
+}
+
+# ---------------------------------------------------------------- 15
+Step 15 'Contrôles manuels (écran, bruit, ports, état physique)'
 $manual = [ordered]@{}
 $doScreen = Read-Host 'Lancer le test de l’écran en plein écran (pixels morts, taches) ? (O/N)'
 if ($doScreen -match '^[oOyY]') {
@@ -1161,6 +1535,8 @@ if ($gPlan) {
     }
 }
 if ($xmpOff) { Add-Upg 1 'Réglage BIOS (gratuit)' "Activer le profil XMP/EXPO dans le BIOS pour que la RAM tourne à $($mods[0].Speed) MT/s (actuellement $($mods[0].ConfiguredClockSpeed))." 'Performance mémoire gratuite, en 2 minutes.' }
+if (($gpuOnMain -and $null -ne $gpuDrop -and $gpuDrop -ge 20) -or ($gpuMaxT -and $gpuMaxT -ge 84) -or ($gpuMaxHot -and $gpuMaxHot -ge 100)) { Add-Upg 1 'Refroidissement carte graphique' 'Dépoussiérer la carte graphique et le boîtier, vérifier que ses ventilateurs tournent ; si la carte a plus de 3 ans, faire changer sa pâte et ses pads thermiques. Améliorer la ventilation du boîtier.' 'La carte garde toute sa puissance en jeu et dure plus longtemps.' }
+if ($gpuRes -and ($gpuRes.lost -or $gpuRes.errors -gt 0)) { Add-Upg 1 'Carte graphique' 'Instabilité détectée : réinstaller proprement le pilote (DDU), retirer tout overclocking (MSI Afterburner), vérifier l’alimentation et les câbles PCIe, puis refaire le test. Si les erreurs persistent : carte défectueuse.' 'Plus de plantages ni d’artefacts en jeu.' }
 if ($freqDrop -or ($maxT -and $maxT -gt 90)) { Add-Upg 1 'Refroidissement' 'Nettoyer la poussière, vérifier les ventilateurs / le ventirad et refaire la pâte thermique.' 'Le processeur ne sera plus bridé par la chaleur.' }
 if ($badTot -gt 0) { Add-Upg 1 'Processeur' 'Calculs faux sous charge : remettre le BIOS par défaut (désactiver l’overclocking), vérifier le refroidissement, puis tester à nouveau.' 'Stabilité (plantages, fichiers corrompus).' }
 if ($ramErrors -gt 0) { Add-Upg 1 'Mémoire vive' 'Erreurs RAM : désactiver XMP pour tester, puis tester chaque barrette seule avec MemTest86 et remplacer la barrette défectueuse.' 'Stabilité.' }
@@ -1226,7 +1602,7 @@ if ($upg.Count) {
 # =====================================================================
 $compRows = @()
 $compRows += ,@('Processeur', "$cpuName ($cores cœurs / $threads threads)", [int][math]::Round(0.4 * $S + 0.6 * $M), "1 cœur : $([int]$S)/100 - multi-cœurs : $([int]$M)/100$(if ($scaling) { " (gain mesuré x$scaling)" })$(if (-not $cpuInfo.Known) { ' - estimation' })", '100 = Ryzen 9 9950X / Core Ultra 9 285K')
-$compRows += ,@('Carte graphique', "$gpuName$(if ($hasDgpu) { " - $V Go" } else { ' (intégrée)' })", [int]$G, $(if ($mainGpu -and $mainGpu.Av1) { 'Encodage AV1 matériel : oui' } else { 'Encodage AV1 matériel : non' }), '100 = RTX 5090 ; 40 = bonne carte 1440p ; 20 = carte 1080p')
+$compRows += ,@('Carte graphique', "$gpuName$(if ($hasDgpu) { " - $V Go" } else { ' (intégrée)' })", [int]$G, "$(if ($gpuScore -and $gpuOnMain) { "Mesurée : $gpuScore G ops/s, " })$(if ($gpuRes -and $gpuRes.ok) { "stable ($($gpuRes.errors) erreur), " })$(if ($gpuMaxT) { "$gpuMaxT C max, " })encodage AV1 matériel : $(if ($mainGpu -and $mainGpu.Av1) { 'oui' } else { 'non' })", '100 = RTX 5090 ; 40 = bonne carte 1440p ; 20 = carte 1080p')
 $compRows += ,@('Mémoire vive', "$ramTotal Go $ramType, $channels canal(aux)$(if ($ramSoldered) { ', soudée' })", [int]$Ridx, $(if ($memBw) { "Bande passante mesurée : $memBw Go/s" } else { '' }), '100 = 64 Go double canal ; 85 = 32 Go ; 55 = 16 Go')
 $compRows += ,@('Stockage', "$(if ($sysDisk) { $sysDisk.FriendlyName } else { 'Disque C:' }) - $sysKind", [int]$D, "Écriture $writeMBs Mo/s$(if ($seqRead) { ", lecture $([int]$seqRead) Mo/s" }), $freeC Go libres$(if ($null -ne $sysWear) { ", usure $sysWear %" })", '100 = SSD NVMe rapide (> 2 500 Mo/s) avec de la place')
 $h = "<table><tr><th>Composant</th><th>Modèle</th><th style='min-width:150px'>Note</th><th>Détail</th><th>Référence</th></tr>"
@@ -1302,16 +1678,17 @@ $usageHtml
 $compHtml
 <h2>Améliorations conseillées</h2>
 $upgHtml
+$(if ($extRes) { "<h2>Clé / disque externe testé ($(Enc $extRes.Letter): $(Enc $extRes.Label))</h2><div class='banner $($extRes.Cls)'>$(Enc $extRes.Verdict)</div><p class='small'>Annoncé : $($extRes.Announced) Go - testé : $($extRes.Tested) Go - zones défectueuses : $($extRes.Bad) Go - écriture $($extRes.Write) Mo/s, lecture $($extRes.Read) Mo/s</p>" })
 <h2>Santé : points relevés</h2>
 $alertHtml
 <details><summary>Détails techniques</summary>
 $($sections -join "`n")
 </details>
 <h2>À compléter à la main</h2><ul>
-<li>Carte graphique : lancer OCCT (dossier OCCT), test « 3D Adaptive » ou « Power » 10 min, vérifier 0 erreur et GPU &lt; 85 °C.</li>
+$(if (-not ($gpuRes -and $gpuRes.ok)) { '<li>Carte graphique : le test intégré n’a pas pu se faire ; lancer OCCT (dossier OCCT), test « 3D Adaptive » 10 min, vérifier 0 erreur et GPU &lt; 85 °C.</li>' } else { '<li>Carte graphique : pour un test de stabilité plus long (30 min), OCCT « 3D Adaptive ».</li>' })
 <li>RAM : pour un test complet, MemTest86 sur clé USB (1 à 2 h).</li>
 <li>Ports USB, Wi-Fi / Ethernet, prises audio.</li></ul>
-<p class="small">Les indices de performance sont des ordres de grandeur issus de moyennes publiques (jeu 1440p, rendu, encodage) et du benchmark intégré. Les températures du capteur ACPI sont indicatives ; OCCT ou HWiNFO donnent les vraies températures CPU/GPU.</p>
+<p class="small">Les indices de performance sont des ordres de grandeur issus de moyennes publiques (jeu 1440p, rendu, encodage) et du benchmark intégré. $(if ($lhmCpuOk) { 'Températures lues par LibreHardwareMonitor sur les capteurs du processeur et de la carte graphique.' } else { 'Sans LibreHardwareMonitor, la température du processeur vient du capteur ACPI (indicatif).' }) La puissance mesurée de la carte graphique (G ops/s) sert de référence pour comparer des PC entre eux.</p>
 </body></html>
 "@
 $html | Out-File -FilePath $reportPath -Encoding UTF8
@@ -1331,6 +1708,9 @@ foreach ($ur in $usageRes) {
     if ($null -ne $ur.After -and $ur.After -gt $ur.Score) { $line += " | avec $((@($ur.Plan.Items | ForEach-Object { $_.Short })) -join ' + ') : $($ur.After)/100" }
     $sum += $line
 }
+$sum += ''; $sum += "TEST CARTE GRAPHIQUE : $(if ($gpuRes) { "$($gpuRes.renderer) | $gpuScore G ops/s | chute $gpuDrop % | erreurs $($gpuRes.errors)/$($gpuRes.checks) | temp. max $gpuMaxT C | utilisation $([int]$gpuUtil) %" } else { 'non réalisé' })"
+$sum += "TEST PROCESSEUR : 1 cœur $mono pts | multi $multi pts | gain x$scaling | temp. max $maxT C | calculs faux $badTot"
+if ($extRes) { $sum += "DISQUE EXTERNE $($extRes.Letter): : $($extRes.Verdict) (écriture $($extRes.Write) Mo/s, lecture $($extRes.Read) Mo/s)" }
 $sum += ''; $sum += 'POINTS RELEVÉS :'
 foreach ($a in ($alerts | Sort-Object { @{ ROUGE = 0; ORANGE = 1; INFO = 2; OK = 3 }[$_.Level] })) { $sum += " [$($a.Level)] $($a.Text)" }
 $sum += ''; $sum += 'AMÉLIORATIONS CONSEILLÉES :'
@@ -1341,6 +1721,7 @@ Write-Host ''
 Write-Host "Rapport enregistré : $reportPath"
 Write-Host "Résumé texte (à envoyer à Claude) : $txtPath"
 Start-Process $reportPath
+if ($lhm) { try { $lhm.Close() } catch {} }
 
 $occt = Get-ChildItem (Join-Path $root 'OCCT') -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($occt) {
