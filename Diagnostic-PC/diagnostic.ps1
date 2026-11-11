@@ -16,7 +16,7 @@
 param([switch]$Reprise)
 $ErrorActionPreference = 'Continue'
 $Error.Clear()
-$VERSION = '2.9'
+$VERSION = '3.0'
 try { $Host.UI.RawUI.WindowTitle = 'Diagnostic PC' } catch {}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportDir = Join-Path $root 'Rapports'
@@ -506,6 +506,15 @@ $cpuInfo = Get-CpuInfo $cpuName $isLaptop
 $threads = [int]$cpu.NumberOfLogicalProcessors
 $cores = [int]$cpu.NumberOfCores
 $slots = (Get-CimInstance Win32_PhysicalMemoryArray | Measure-Object -Property MemoryDevices -Sum).Sum
+$maxRamGB = $null
+try { $mx = (Get-CimInstance Win32_PhysicalMemoryArray | Measure-Object -Property MaxCapacityEx -Sum).Sum; if (-not $mx) { $mx = (Get-CimInstance Win32_PhysicalMemoryArray | Measure-Object -Property MaxCapacity -Sum).Sum }
+      if ($mx -gt 0) { $maxRamGB = [int][math]::Round($mx / 1MB) } } catch {}
+$chipset = $null
+try {
+    $lpc = Get-CimInstance Win32_PnPEntity -ErrorAction Stop | Where-Object { "$($_.Name)" -match '\b[ABHQXZW]\d{3}[A-Z]?\s+Chipset' } | Select-Object -First 1
+    if ($lpc -and "$($lpc.Name)" -match '\b([ABHQXZW]\d{3}[A-Z]?)\s+Chipset') { $chipset = "$(if ("$($lpc.Name)" -match 'Intel') { 'Intel ' })$($Matches[1])" }
+} catch {}
+if (-not $chipset -and "$($bb.Product)" -match '\b(A320|A520|B350|B450|B550|X370|X470|X570|A620|B650E?|X670E?|B850|X870E?|[HBZQW][1-9]\d0[A-Z]?)\b') { $chipset = $Matches[1] }
 $biosDate = ''; try { $biosDate = $bios.ReleaseDate.ToString('dd/MM/yyyy') } catch {}
 Add-Table 'Processeur, carte mère, BIOS' ([ordered]@{
     'Type de PC'           = $pcType
@@ -591,6 +600,7 @@ foreach ($g in @(Get-CimInstance Win32_VideoController)) {
     $info.Driver = $g.DriverVersion
     $info.DriverDate = $g.DriverDate
     $info.Res = "$($g.CurrentHorizontalResolution) x $($g.CurrentVerticalResolution) @ $($g.CurrentRefreshRate) Hz"
+    $info.Pnp = "" + $g.PNPDeviceID
     $gpus += [pscustomobject]$info
 }
 $mainGpu = $gpus | Sort-Object { [double]$_.G } -Descending | Select-Object -First 1
@@ -1175,6 +1185,48 @@ function Get-NoiseDb([int]$ms) {
     return $null
 }
 
+# --- Carte mère : tensions, températures, ventilateurs, pile (via LibreHardwareMonitor)
+function Read-Board {
+    $o = [pscustomobject]@{ V12 = $null; V5 = $null; V33 = $null; VBat = $null; Vrm = $null; Chip = $null; Sys = $null; Fans = @() }
+    if (-not $script:lhm) { return $o }
+    try {
+        foreach ($hw in $script:lhm.Hardware) {
+            if ("$($hw.HardwareType)" -ne 'Motherboard') { continue }
+            $hw.Update(); foreach ($sub in $hw.SubHardware) { $sub.Update() }
+            foreach ($h in @($hw) + @($hw.SubHardware)) {
+                foreach ($s in $h.Sensors) {
+                    if ($null -eq $s.Value) { continue }
+                    $st = "$($s.SensorType)"; $nm = "$($s.Name)".Trim(); $v = [double]$s.Value
+                    if ($st -eq 'Voltage') {
+                        # on ne garde que les tensions nommées et plausibles (±25 %)
+                        if ($nm -match '^\+?12 ?V' -and $v -gt 9 -and $v -lt 15) { $o.V12 = $v }
+                        elseif ($nm -match '^\+?5 ?V' -and $nm -notmatch 'SB|Standby' -and $v -gt 3.75 -and $v -lt 6.25) { $o.V5 = $v }
+                        elseif ($nm -match '^\+?3[\.,]3 ?V|^3VCC' -and $v -gt 2.5 -and $v -lt 4.1) { $o.V33 = $v }
+                        elseif ($nm -match 'CMOS|VBAT|Battery' -and $v -gt 1 -and $v -lt 3.6) { $o.VBat = $v }
+                    } elseif ($st -eq 'Temperature' -and $v -gt 0 -and $v -lt 130) {
+                        if ($nm -match 'VRM|MOS|VSoc|Power') { if ($null -eq $o.Vrm -or $v -gt $o.Vrm) { $o.Vrm = $v } }
+                        elseif ($nm -match 'Chipset|PCH') { if ($null -eq $o.Chip -or $v -gt $o.Chip) { $o.Chip = $v } }
+                        elseif ($nm -match 'System|Motherboard|Carte') { if ($null -eq $o.Sys -or $v -gt $o.Sys) { $o.Sys = $v } }
+                    } elseif ($st -eq 'Fan' -and $nm -notmatch 'Pump') {
+                        $o.Fans += [pscustomobject]@{ Name = $nm; Rpm = [int]$v }
+                    }
+                }
+            }
+        }
+    } catch {}
+    $o
+}
+# --- Liaison PCI Express dʼun périphérique (carte graphique) : génération et nombre de lignes
+function Get-PciLink([string]$instId) {
+    if (-not $instId) { return $null }
+    try {
+        $keys = 'DEVPKEY_PciDevice_CurrentLinkSpeed', 'DEVPKEY_PciDevice_CurrentLinkWidth', 'DEVPKEY_PciDevice_MaxLinkSpeed', 'DEVPKEY_PciDevice_MaxLinkWidth'
+        $p = @{}; foreach ($k in $keys) { $p[$k] = (Get-PnpDeviceProperty -InstanceId $instId -KeyName $k -ErrorAction Stop).Data }
+        if (-not $p['DEVPKEY_PciDevice_CurrentLinkWidth']) { return $null }
+        return [pscustomobject]@{ Gen = [int]$p['DEVPKEY_PciDevice_CurrentLinkSpeed']; Width = [int]$p['DEVPKEY_PciDevice_CurrentLinkWidth']; MaxGen = [int]$p['DEVPKEY_PciDevice_MaxLinkSpeed']; MaxWidth = [int]$p['DEVPKEY_PciDevice_MaxLinkWidth'] }
+    } catch { return $null }
+}
+
 # ---------------------------------------------------------------- refroidissement
 # Type de refroidissement : watercooling (AIO, avec ou sans écran), ventirad, portable.
 function Read-Cooling {
@@ -1209,6 +1261,8 @@ foreach ($k in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'H
 }
 $coolApps = @($coolApps | Sort-Object -Unique)
 $cool0 = Read-Cooling
+$board0 = Read-Board
+$boardLoadFans = @()
 $aio = ($cool0.Coolers.Count -gt 0 -or $null -ne $cool0.Pump -or $null -ne $cool0.Liquid -or @($coolDevs | Where-Object { $_ -match 'Kraken|Capellix|H1[0-9]{2}i|Ryujin|Ryuo|Galahad|Floe|Coreliquid|Liquid|AIO|Hydro|D5' }).Count -gt 0)
 $aioLcd = (@($coolDevs + $cool0.Coolers | Where-Object { $_ -match 'Elite|LCD|Z[0-9]{2}|Ryujin|Galahad II LCD|Screen|Display' }).Count -gt 0)
 $coolType = $(if ($isLaptop) { 'Ventilation intégrée (portable)' }
@@ -1238,7 +1292,8 @@ if ($benchOk) {
         if (-not $temp -and -not $lhmCpuOk) { try { $tz = Get-CimInstance Win32_PerfFormattedData_Counters_ThermalZoneInformation -ErrorAction Stop | Select-Object -First 1; if ($tz.HighPrecisionTemperature) { $temp = [math]::Round($tz.HighPrecisionTemperature / 10 - 273.15) } } catch {} }
         $el = [int]((Get-Date) - $start).TotalSeconds
         $ck = Read-Cooling
-        $samples.Add([pscustomobject]@{ T = $el; Charge = $load; MHz = $freq; Temp = $temp; Pump = $ck.Pump; Liquid = $ck.Liquid; FanMax = $(if ($ck.Fans.Count) { ($ck.Fans | Measure-Object -Maximum).Maximum } else { $null }); FanMin = $(if ($ck.Fans.Count) { ($ck.Fans | Measure-Object -Minimum).Minimum } else { $null }) })
+        $bd = Read-Board; if ($bd.Fans.Count) { $boardLoadFans = $bd.Fans }
+        $samples.Add([pscustomobject]@{ T = $el; Charge = $load; MHz = $freq; Temp = $temp; Pump = $ck.Pump; Liquid = $ck.Liquid; FanMax = $(if ($ck.Fans.Count) { ($ck.Fans | Measure-Object -Maximum).Maximum } else { $null }); FanMin = $(if ($ck.Fans.Count) { ($ck.Fans | Measure-Object -Minimum).Minimum } else { $null }); V12 = $bd.V12; V5 = $bd.V5; V33 = $bd.V33; Vrm = $bd.Vrm; Chip = $bd.Chip })
         Write-Progress -Activity 'Test de charge processeur' -Status "Charge $load %  |  $freq MHz  |  temp. capteur : $temp C" -PercentComplete ([math]::Min(100, 100 * $el / $seconds))
     }
     $r = [DiagBench]::Finish(); $okTot = $r[0]; $badTot = $r[1]
@@ -1366,6 +1421,7 @@ canvas{width:100vw;height:100vh;display:block}#hud{position:fixed;left:16px;top:
 '@
 $gpuHtml = $gpuHtml.Replace('__DURATION__', "$gpuSec")
 $gpuRes = $null; $gpuSamples = New-Object System.Collections.Generic.List[object]
+$gpuLink = $null
 $udd = Join-Path $env:TEMP 'diag-gpu-navigateur'
 $listener = $null
 try {
@@ -1388,6 +1444,7 @@ try {
                 $lastSample = Get-Date
                 $nv = Get-NvSample; $lt = Read-Lhm
                 $gt = $null; if ($nv -and $nv.Temp) { $gt = $nv.Temp } elseif ($lt.Gpu) { $gt = $lt.Gpu }
+                if (-not $gpuLink -and ((Get-Date) - $t0).TotalSeconds -ge 15 -and $mainGpu -and -not $mainGpu.Igpu) { $gpuLink = Get-PciLink $mainGpu.Pnp }
                 $gpuSamples.Add([pscustomobject]@{ T = [int]((Get-Date) - $t0).TotalSeconds; Temp = $gt; Hot = $lt.GpuHot; Util = $(if ($nv) { $nv.Util }); Clock = $(if ($nv) { $nv.Clock }); Power = $(if ($nv) { $nv.Power }) })
             }
             if ((Get-Date) -gt $deadline) { break }
@@ -1455,6 +1512,50 @@ if ($gpuRes) {
     if ($gpuMaxT -and $gpuMaxT -ge 90) { Add-Alert ROUGE "Carte graphique à $gpuMaxT C : beaucoup trop chaude." 10 }
     elseif ($gpuMaxT -and $gpuMaxT -ge 84) { Add-Alert ORANGE "Carte graphique à $gpuMaxT C : chaude." 4 }
 } else { Write-Host '   Pas de résultat du test de la carte graphique.' -ForegroundColor Yellow; Add-Alert INFO 'Test de la carte graphique non réalisé (Edge absent ou bloqué) : faire un test OCCT à la main.' }
+
+# ---------------------------------------------------------------- carte mère : bilan
+$railRange = { param($vals) $x = @($vals | Where-Object { $null -ne $_ }); if ($x.Count) { [pscustomobject]@{ Min = ($x | Measure-Object -Minimum).Minimum; Max = ($x | Measure-Object -Maximum).Maximum } } else { $null } }
+$r12 = & $railRange (@($board0.V12) + @($samples | ForEach-Object { $_.V12 }))
+$r5  = & $railRange (@($board0.V5)  + @($samples | ForEach-Object { $_.V5 }))
+$r33 = & $railRange (@($board0.V33) + @($samples | ForEach-Object { $_.V33 }))
+$vrmMax  = ($samples | Where-Object { $_.Vrm }  | Measure-Object -Property Vrm -Maximum).Maximum
+$chipMax = ($samples | Where-Object { $_.Chip } | Measure-Object -Property Chip -Maximum).Maximum
+$fanTxt = $(if ($boardLoadFans.Count) { (($boardLoadFans | ForEach-Object { "$($_.Name) $($_.Rpm) tr/min" }) -join ', ') } else { 'non lisibles' })
+$fmtRail = { param($r, $nom) if ($r) { "$([math]::Round($r.Min, 2)) à $([math]::Round($r.Max, 2)) V" } else { 'non lisible' } }
+Add-Table 'Carte mère' ([ordered]@{
+    'Modèle'                       = "$($bb.Manufacturer) $($bb.Product)"
+    'Chipset'                      = $(if ($chipset) { $chipset } else { 'non identifié' })
+    'BIOS'                         = "$($bios.SMBIOSBIOSVersion) du $biosDate"
+    'RAM maximale acceptée'        = $(if ($maxRamGB) { "$maxRamGB Go ($slots emplacement(s))" } else { "inconnue ($slots emplacement(s))" })
+    'SSD NVMe installés'           = "$(@($pdisks | Where-Object { "$($_.BusType)" -eq 'NVMe' }).Count) (les emplacements M.2 libres se vérifient sur la fiche de la carte)"
+    'Tension 12 V (repos / charge)' = & $fmtRail $r12 '12'
+    'Tension 5 V'                  = & $fmtRail $r5 '5'
+    'Tension 3,3 V'                = & $fmtRail $r33 '3.3'
+    'Pile du BIOS'                 = $(if ($board0.VBat) { "$([math]::Round($board0.VBat, 2)) V" } else { 'non lisible' })
+    'Température VRM (alim. CPU)'  = $(if ($vrmMax) { "$([int]$vrmMax) C max sous charge" } else { 'non lisible' })
+    'Température chipset'          = $(if ($chipMax) { "$([int]$chipMax) C max" } else { 'non lisible' })
+    'Ventilateurs (sous charge)'   = $fanTxt
+    'Liaison carte graphique'      = $(if ($gpuLink) { "PCIe $($gpuLink.Gen).0 x$($gpuLink.Width) (max de la carte : PCIe $($gpuLink.MaxGen).0 x$($gpuLink.MaxWidth))" } else { 'non lisible' })
+})
+# tensions : tolérance ATX ±5 %
+$psuBad = $false
+foreach ($rail in @(@($r12, 12.0, '12 V'), @($r5, 5.0, '5 V'), @($r33, 3.3, '3,3 V'))) {
+    $r = $rail[0]; $nom = [double]$rail[1]
+    if (-not $r) { continue }
+    $dev = [math]::Max([math]::Abs($r.Min - $nom), [math]::Abs($r.Max - $nom)) / $nom
+    if ($dev -gt 0.05) { $psuBad = $true; Add-Alert ROUGE "Tension $($rail[2]) hors tolérance ($([math]::Round($r.Min, 2)) à $([math]::Round($r.Max, 2)) V) : alimentation fatiguée ou défaillante." 15 }
+    elseif ($dev -gt 0.035) { Add-Alert ORANGE "Tension $($rail[2]) en limite de tolérance ($([math]::Round($r.Min, 2)) à $([math]::Round($r.Max, 2)) V) : alimentation à surveiller." 3 }
+}
+if (-not $psuBad -and ($r12 -or $r5 -or $r33)) { Add-Alert OK 'Tensions de lʼalimentation dans la tolérance, au repos comme sous charge.' }
+if ($board0.VBat -and $board0.VBat -lt 2.7) { Add-Alert ORANGE "Pile du BIOS faible ($([math]::Round($board0.VBat, 2)) V) : la remplacer (pile CR2032, quelques euros)." 2 }
+if ($vrmMax -and $vrmMax -ge 110) { Add-Alert ROUGE "Circuit dʼalimentation du processeur (VRM) à $([int]$vrmMax) C : beaucoup trop chaud." 10 }
+elseif ($vrmMax -and $vrmMax -ge 95) { Add-Alert ORANGE "Circuit dʼalimentation du processeur (VRM) à $([int]$vrmMax) C : chaud, améliorer la ventilation du boîtier." 4 }
+if ($chipMax -and $chipMax -ge 85) { Add-Alert ORANGE "Chipset à $([int]$chipMax) C : chaud." 3 }
+if ($gpuLink -and $gpuLink.MaxWidth -gt 0 -and $gpuLink.Width -lt $gpuLink.MaxWidth) {
+    Add-Alert ORANGE "La carte graphique fonctionne en x$($gpuLink.Width) au lieu de x$($gpuLink.MaxWidth) : carte mal enfoncée, mauvais emplacement PCIe ou emplacement limité par la carte mère." 5
+} elseif ($gpuLink -and $gpuLink.MaxGen -gt 0 -and $gpuLink.Gen -lt $gpuLink.MaxGen -and $gpuLink.Gen -ge 1) {
+    Add-Alert INFO "Carte graphique en PCIe $($gpuLink.Gen).0 alors quʼelle accepte PCIe $($gpuLink.MaxGen).0 (carte mère plus ancienne ou réglage du BIOS ; perte de performance généralement faible)."
+}
 
 # ---------------------------------------------------------------- 13
 Step 13 'Sécurité, logiciels suspects (minage, overclocking), périphériques'
@@ -2028,6 +2129,7 @@ function Get-Plan($usageList, $c) {
     # RAM
     if ($need.R -gt 0 -and $c2.R -lt $need.R) {
         $target = [math]::Max(16, [math]::Pow(2, [math]::Ceiling([math]::Log([math]::Max($need.R, 8)) / [math]::Log(2))))
+        if ($maxRamGB -and $maxRamGB -ge 8 -and $target -gt $maxRamGB) { $target = [math]::Max($maxRamGB, $ramTotal) }
         if ($ramSoldered) {
             $items += [pscustomobject]@{ Fixed = $true; Piece = 'Mémoire vive'; Key = 'RAM'; D = $deficit.RAM; Short = 'RAM soudée'
                 Action = "RAM $ramType soudée sur la carte mère : impossible dʼen ajouter. Ce PC restera à $ramTotal Go." }
@@ -2160,6 +2262,8 @@ if ($gPlan) {
         Add-Upg ([math]::Min(2, $i + 1)) $it.Piece $it.Action $gainTxt
     }
 }
+if ($psuBad) { Add-Upg 1 'Alimentation' 'Tensions hors tolérance : faire tester lʼalimentation et la remplacer par un modèle de qualité (80 Plus Gold) de puissance adaptée.' 'Évite plantages, redémarrages et pièces abîmées.' }
+if ($board0.VBat -and $board0.VBat -lt 2.7) { Add-Upg 3 'Pile du BIOS' 'Remplacer la pile CR2032 de la carte mère.' 'Évite la perte de la date et des réglages du BIOS.' }
 if ($xmpOff) { Add-Upg 1 'Réglage BIOS (gratuit)' "Activer le profil XMP/EXPO dans le BIOS pour que la RAM tourne à $($mods[0].Speed) MT/s (actuellement $($mods[0].ConfiguredClockSpeed))." 'Performance mémoire gratuite, en 2 minutes.' }
 if (($gpuOnMain -and $null -ne $gpuDrop -and $gpuDrop -ge 20) -or ($gpuMaxT -and $gpuMaxT -ge 84) -or ($gpuMaxHot -and $gpuMaxHot -ge 100)) { Add-Upg 1 'Refroidissement carte graphique' 'Dépoussiérer la carte graphique et le boîtier, vérifier que ses ventilateurs tournent ; si la carte a plus de 3 ans, faire changer sa pâte et ses pads thermiques. Améliorer la ventilation du boîtier.' 'La carte garde toute sa puissance en jeu et dure plus longtemps.' }
 if ($gpuRes -and ($gpuRes.lost -or $gpuRes.errors -gt 0)) { Add-Upg 1 'Carte graphique' 'Instabilité détectée : réinstaller proprement le pilote (DDU), retirer tout overclocking (MSI Afterburner), vérifier lʼalimentation et les câbles PCIe, puis refaire le test. Si les erreurs persistent : carte défectueuse.' 'Plus de plantages ni dʼartefacts en jeu.' }
@@ -2371,6 +2475,7 @@ $sum = @("DIAGNOSTIC PC - $(Get-Date -Format 'dd/MM/yyyy HH:mm') - outil v$VERSI
          'COMPOSANTS :')
 foreach ($cr in $compRows) { $sum += " - $($cr[0]) : $($cr[2])/100 - $($cr[1]) - $($cr[3])" }
 $sum += ''; $sum += 'SCORES DE RÉFÉRENCE (estimés) :'; foreach ($k in $refScores.Keys) { $sum += " - ${k} : $($refScores[$k])" }
+$sum += "CARTE MÈRE : $($bb.Manufacturer) $($bb.Product) | chipset $chipset | RAM max $maxRamGB Go | 12 V $(if ($r12) { "$([math]::Round($r12.Min,2))-$([math]::Round($r12.Max,2))" } else { '?' }) | VRM $vrmMax C | PCIe GPU $(if ($gpuLink) { "$($gpuLink.Gen).0 x$($gpuLink.Width)/x$($gpuLink.MaxWidth)" } else { '?' })"
 $sum += "REFROIDISSEMENT : $coolType$(if ($null -ne $pumpMax) { " | pompe $([int]$pumpMin)-$([int]$pumpMax) tr/min" })$(if ($liqMax) { " | liquide $([math]::Round($liqMax,1)) C" })"
 $sum += ''; $sum += 'USAGES :'
 foreach ($ur in $usageRes) {

@@ -1,4 +1,4 @@
-﻿DIAGNOSTIC PC COMPLET (v2.9) - MODE D'EMPLOI
+﻿DIAGNOSTIC PC COMPLET (v3.0) - MODE D'EMPLOI
 ============================================
 
 Un seul outil, entièrement automatique, qui remplace plusieurs petits logiciels
@@ -39,7 +39,9 @@ PC de bureau et portables, Windows 10 / 11.
    11    Refroidissement détecté (watercooling avec ou sans écran, ventirad, portable) puis
          charge du processeur 5 ou 15 min : calculs vérifiés, fréquence, température, pompe,
          BRUIT des ventilateurs mesuré au micro (repos / charge)
-   12    Carte graphique 1 min 30 ou 10 min : puissance, erreurs de calcul, chauffe
+   12    Carte graphique 1 min 30 ou 10 min : puissance, erreurs de calcul, chauffe, liaison PCIe
+         + CARTE MÈRE : chipset, RAM maximale, tensions 12 V / 5 V / 3,3 V de l'alimentation
+           (repos et charge), températures VRM et chipset, ventilateurs, pile du BIOS
    13    Sécurité : BitLocker, antivirus, traces de minage, overclocking, périphériques
    14    Réseau : Wi-Fi (signal, norme), Ethernet, latence, débit Internet réel
    15    Son : le PC joue un bip et l'écoute avec son micro (haut-parleurs + micro testés),
