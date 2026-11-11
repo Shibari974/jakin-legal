@@ -1,0 +1,625 @@
+<title>Diagnostic Universel</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Mise en page : une colonne de « fiches d'atelier » ; l'appareil détecté en tête, puis les mesures, les tests guidés et le rapport */
+:root {
+  --bg: #f3f5f8; --card: #ffffff; --fg: #141922; --muted: #5a6474; --line: #dbe1e9;
+  --accent: #0d6e7e; --accent-ink: #ffffff; --accent-soft: #e2f1f3;
+  --good: #2e7d32; --warn: #b26a00; --bad: #c62828;
+  --font-display: "Archivo", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11151b; --card: #1a2029; --fg: #e7ebf0; --muted: #98a3b2; --line: #2c3540;
+  --accent: #46b3c4; --accent-ink: #0b1a1d; --accent-soft: #15323a;
+  --good: #5cb860; --warn: #e3a33b; --bad: #ef6b6b; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #11151b; --card: #1a2029; --fg: #e7ebf0; --muted: #98a3b2; --line: #2c3540;
+  --accent: #46b3c4; --accent-ink: #0b1a1d; --accent-soft: #15323a;
+  --good: #5cb860; --warn: #e3a33b; --bad: #ef6b6b; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 860px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 48px; display: grid; gap: 18px; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(26px, 6vw, 36px); font-weight: 800; letter-spacing: -0.01em; }
+h2 { font-size: 20px; font-weight: 700; }
+h3 { font-size: 16px; font-weight: 700; }
+p { margin: 0; }
+.lede { color: var(--muted); max-width: 62ch; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: grid; gap: 12px; min-width: 0; }
+.eyebrow { font-family: var(--font-data); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chips button { font: 500 14px var(--font-body); border: 1px solid var(--line); background: transparent; color: var(--fg); border-radius: 999px; padding: 6px 14px; cursor: pointer; }
+.chips button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.specs { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px 16px; }
+.spec { display: grid; gap: 2px; min-width: 0; }
+.spec b { font-family: var(--font-data); font-weight: 500; font-size: 14px; overflow-wrap: anywhere; }
+.spec span { font-size: 12px; color: var(--muted); }
+.btn { font: 600 15px var(--font-body); border: 0; border-radius: 10px; padding: 11px 18px; background: var(--accent); color: var(--accent-ink); cursor: pointer; }
+.btn.secondary { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+.btn:disabled { opacity: .55; cursor: default; }
+.btn:focus-visible, .chips button:focus-visible, .ans button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.steps { display: grid; gap: 6px; font-family: var(--font-data); font-size: 13px; }
+.step { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px dashed var(--line); padding-bottom: 4px; }
+.step .st { color: var(--muted); white-space: nowrap; }
+.step.done .st { color: var(--good); }
+.step.run .st { color: var(--accent); }
+.tests { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.test { border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.test .state { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
+.test .state.ok { color: var(--good); } .test .state.ko { color: var(--bad); }
+.ans { display: flex; flex-wrap: wrap; gap: 6px; }
+.ans button { font: 500 13px var(--font-body); border: 1px solid var(--line); background: transparent; color: var(--fg); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.thumb { max-width: 100%; border-radius: 8px; border: 1px solid var(--line); }
+.scores { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.score { border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 4px; }
+.score .n { font-family: var(--font-display); font-size: 42px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.score .n small { font-size: 18px; color: var(--muted); font-weight: 600; }
+.bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: 4px; }
+.verdict { border-radius: 10px; padding: 12px 14px; font-weight: 600; color: #fff; }
+.verdict.g { background: var(--good); } .verdict.o { background: var(--warn); } .verdict.r { background: var(--bad); } .verdict.n { background: var(--muted); }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 8px; border-bottom: 1px solid var(--line); }
+th { font-family: var(--font-data); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 500; }
+td.num { font-family: var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lv { font-weight: 600; white-space: nowrap; } .lv.g { color: var(--good); } .lv.o { color: var(--warn); } .lv.r { color: var(--bad); }
+.small { font-size: 13px; color: var(--muted); }
+ul.alerts { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+ul.alerts li.r { color: var(--bad); } ul.alerts li.o { color: var(--warn); } ul.alerts li.g { color: var(--good); }
+pre.raw { font-family: var(--font-data); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; color: var(--muted); }
+#overlay { position: fixed; inset: 0; z-index: 50; background: #000; touch-action: none; }
+#overlay canvas { width: 100%; height: 100%; display: block; }
+#hint { position: fixed; left: 50%; bottom: calc(28px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); width: min(92vw, 640px); background: rgba(0,0,0,.78); color: #fff; padding: 10px 14px; border-radius: 10px; font: 500 15px var(--font-body); text-align: center; pointer-events: none; }
+#overlayBar { position: fixed; right: calc(12px + env(safe-area-inset-right, 0px)); top: calc(12px + env(safe-area-inset-top, 0px)); display: flex; gap: 8px; }
+#overlayBar button { font: 600 14px var(--font-body); border: 0; border-radius: 8px; padding: 9px 14px; background: rgba(255,255,255,.92); color: #111; cursor: pointer; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="wrap">
+  <header style="display:grid;gap:6px">
+    <div class="eyebrow">Diagnostic d'appareil · v1</div>
+    <h1>Diagnostic Universel</h1>
+    <p class="lede">Une seule analyse pour téléphone, tablette ou PC. L'appareil est détecté automatiquement ; seules les mesures disponibles changent d'un appareil à l'autre.</p>
+  </header>
+
+  <section class="card" aria-labelledby="t-dev">
+    <div class="row" style="justify-content:space-between"><h2 id="t-dev">Appareil détecté</h2><span class="small" id="devGuess"></span></div>
+    <div class="row chips" role="group" aria-label="Type d'appareil">
+      <button type="button" id="ty-phone" data-ty="phone">Téléphone</button>
+      <button type="button" id="ty-tablet" data-ty="tablet">Tablette</button>
+      <button type="button" id="ty-pc" data-ty="pc">PC</button>
+    </div>
+    <div class="specs" id="specs"></div>
+  </section>
+
+  <section class="card" aria-labelledby="t-run">
+    <h2 id="t-run">1. Mesures automatiques</h2>
+    <p class="small">Environ 30 secondes : processeur (1 cœur puis tous les cœurs, calculs vérifiés), carte graphique (puissance, erreurs, chauffe) et fréquence de l'écran. Laisse l'appareil posé, écran allumé, sans changer d'application.</p>
+    <div class="row"><button class="btn" type="button" id="runBtn">Lancer les mesures</button><span class="small" id="runInfo"></span></div>
+    <div class="steps" id="steps"></div>
+  </section>
+
+  <section class="card" aria-labelledby="t-guided">
+    <h2 id="t-guided">2. Tests guidés</h2>
+    <p class="small">Tu regardes, tu touches, tu écoutes : la page affiche, toi tu juges. Fais ceux qui t'intéressent.</p>
+    <div class="tests" id="tests"></div>
+  </section>
+
+  <section class="card" aria-labelledby="t-rep" id="report">
+    <h2 id="t-rep">3. Rapport</h2>
+    <div id="repBody"></div>
+    <div class="row">
+      <button class="btn secondary" type="button" id="copyBtn">Copier le rapport</button>
+      <button class="btn secondary" type="button" id="saveBtn" hidden>Enregistrer en .txt</button>
+      <span class="small" id="copyInfo"></span>
+    </div>
+    <textarea id="copyArea" aria-label="Rapport texte" readonly hidden style="width:100%;min-height:160px;font:12px var(--font-data);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px"></textarea>
+  </section>
+</div>
+
+<div id="overlay" hidden><canvas id="ov"></canvas><div id="hint"></div><div id="overlayBar"></div></div>
+<input type="file" id="camBack" accept="image/*" capture="environment" hidden>
+<input type="file" id="camFront" accept="image/*" capture="user" hidden>
+
+<script>
+(() => {
+"use strict";
+// ---------------------------------------------------------------- calibrage
+// Indices sur la même échelle que le Diagnostic-PC : 100 = processeur le plus rapide / RTX 5090.
+const CPU_REF = { unitsPerSec: 13234, index: 58 };   // référence : cœur Xeon 2,1 GHz (Chrome) estimé à 58/100 ; à affiner avec des appareils connus
+const GPU_GOPS_PER_POINT = 8.5;                    // 850 G ops/s ≈ 100 (RTX 5090)
+
+// ---------------------------------------------------------------- état
+const S = {
+  type: null, os: '', browser: '', model: '', cores: navigator.hardwareConcurrency || null,
+  mem: navigator.deviceMemory || null, dpr: window.devicePixelRatio || 1, touch: navigator.maxTouchPoints || 0,
+  renderer: '', battery: null, hz: null,
+  cpu: null, gpu: null,                 // résultats des mesures
+  screen: null, touchT: null, sound: null, cam: null,   // résultats des tests guidés
+  running: false
+};
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const clamp = (v, a = 0, b = 100) => Math.max(a, Math.min(b, v));
+
+// ---------------------------------------------------------------- détection
+function detect() {
+  const ua = navigator.userAgent;
+  let os = 'Inconnu', type = 'pc';
+  if (/Android/i.test(ua)) { os = 'Android'; type = /Mobile/i.test(ua) ? 'phone' : 'tablet'; }
+  else if (/iPhone|iPod/.test(ua)) { os = 'iOS (iPhone)'; type = 'phone'; }
+  else if (/iPad/.test(ua) || (/Macintosh/.test(ua) && S.touch > 1)) { os = 'iPadOS'; type = 'tablet'; }
+  else if (/Windows/.test(ua)) os = 'Windows';
+  else if (/CrOS/.test(ua)) os = 'ChromeOS';
+  else if (/Mac OS X/.test(ua)) os = 'macOS';
+  else if (/Linux/.test(ua)) os = 'Linux';
+  let browser = 'Navigateur';
+  if (/Edg\//.test(ua)) browser = 'Edge'; else if (/SamsungBrowser/.test(ua)) browser = 'Samsung Internet';
+  else if (/Firefox\//.test(ua)) browser = 'Firefox'; else if (/CriOS|Chrome\//.test(ua)) browser = 'Chrome';
+  else if (/Safari\//.test(ua)) browser = 'Safari';
+  S.os = os; S.browser = browser; S.type = type; S.autoType = type;
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2') || document.createElement('canvas').getContext('webgl');
+    const dbg = gl && gl.getExtension('WEBGL_debug_renderer_info');
+    S.renderer = gl ? (dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) : 'WebGL indisponible';
+  } catch (e) { S.renderer = 'inconnu'; }
+  try { if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues)
+    navigator.userAgentData.getHighEntropyValues(['model', 'platformVersion']).then(v => { if (v.model) { S.model = v.model; renderSpecs(); } }).catch(() => {}); } catch (e) {}
+  try { if (navigator.getBattery) navigator.getBattery().then(b => { S.battery = { level: Math.round(b.level * 100), charging: b.charging }; renderSpecs(); }).catch(() => {}); } catch (e) {}
+}
+const TYPE_LABEL = { phone: 'Téléphone', tablet: 'Tablette', pc: 'PC' };
+function renderSpecs() {
+  for (const t of ['phone', 'tablet', 'pc']) $('ty-' + t).setAttribute('aria-pressed', String(S.type === t));
+  $('devGuess').textContent = 'Détection automatique : ' + TYPE_LABEL[S.autoType] + ' ' + S.os;
+  const w = Math.round(screen.width * S.dpr), h = Math.round(screen.height * S.dpr);
+  const items = [
+    ['Système', S.os + (S.model ? ' · ' + S.model : '')],
+    ['Navigateur', S.browser],
+    ['Processeur', S.cores ? S.cores + ' cœurs logiques' : 'non communiqué'],
+    ['Mémoire vive', S.mem ? (S.mem >= 8 ? '8 Go ou plus' : 'environ ' + S.mem + ' Go') : 'non communiquée par ce navigateur'],
+    ['Puce graphique', S.renderer || '?'],
+    ['Écran', w + ' × ' + h + ' pixels' + (S.hz ? ' · ' + S.hz + ' Hz' : '')],
+    ['Tactile', S.touch > 0 ? 'oui (' + S.touch + ' points)' : 'non'],
+    ['Batterie', S.battery ? S.battery.level + ' %' + (S.battery.charging ? ', en charge' : '') : 'non communiquée']
+  ];
+  $('specs').innerHTML = items.map(([k, v]) => `<div class="spec"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
+}
+
+// ---------------------------------------------------------------- processeur (Web Workers)
+const workerSrc = `
+function unit(seed){ var x = seed|0, f = 1.0;
+  for (var i = 0; i < 20000; i++) { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; x = (Math.imul(x, 0x9E3779B1) + i) | 0;
+    f = f * 1.0000001 + (x & 255) * 1e-9; if (f > 2) f -= 1; }
+  return (x ^ ((f * 1e9) | 0)) | 0; }
+onmessage = function (e) { var ms = e.data.ms, expected = unit(1234567), end = performance.now() + ms, n = 0, bad = 0;
+  while (performance.now() < end) { if (unit(1234567) !== expected) bad++; n++; }
+  postMessage({ n: n, bad: bad }); };`;
+let workerUrl = null;
+function runWorkers(count, ms) {
+  if (!workerUrl) workerUrl = URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' }));
+  const jobs = [];
+  for (let i = 0; i < count; i++) {
+    jobs.push(new Promise((res, rej) => { const w = new Worker(workerUrl);
+      w.onmessage = (e) => { w.terminate(); res(e.data); }; w.onerror = (e) => { w.terminate(); rej(e); };
+      w.postMessage({ ms }); }));
+  }
+  return Promise.all(jobs).then(r => ({ ups: r.reduce((a, b) => a + b.n, 0) / (ms / 1000), bad: r.reduce((a, b) => a + b.bad, 0) }));
+}
+
+// ---------------------------------------------------------------- carte graphique (WebGL2)
+function gpuBench(seconds, onTick) {
+  return new Promise((resolve) => {
+    const res = { ok: false, windows: [], errors: 0, checks: 0, lost: false, msg: '' };
+    try {
+      const cv = document.createElement('canvas'); cv.width = 1024; cv.height = 1024;
+      const gl = cv.getContext('webgl2', { powerPreference: 'high-performance', antialias: false, depth: false });
+      if (!gl) { res.msg = 'WebGL2 indisponible'; return resolve(res); }
+      cv.addEventListener('webglcontextlost', e => { res.lost = true; e.preventDefault(); });
+      const vs = '#version 300 es\nin vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }';
+      const fs = '#version 300 es\nprecision highp float; uniform int it; uniform float seed; out vec4 o;\n' +
+        'void main(){ vec4 a = vec4(gl_FragCoord.xy * 0.000977, seed, 0.5);\n' +
+        ' for (int i = 0; i < it; i++) { a = fract(a * 1.0013 + sin(a.yzwx * 3.17 + float(i) * 0.013) * 0.71); }\n o = a; }';
+      const mk = (t, s) => { const x = gl.createShader(t); gl.shaderSource(x, s); gl.compileShader(x);
+        if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+      const pr = gl.createProgram(); gl.attachShader(pr, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(pr, mk(gl.FRAGMENT_SHADER, fs));
+      gl.linkProgram(pr); gl.useProgram(pr);
+      const vb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      const loc = gl.getAttribLocation(pr, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      const uIt = gl.getUniformLocation(pr, 'it'), uSeed = gl.getUniformLocation(pr, 'seed');
+      const target = (w, h) => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
+        const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0); return f; };
+      const W = 1024, H = 1024, big = target(W, H), small = target(64, 64);
+      const px = new Uint8Array(4), chk = new Uint8Array(64 * 64 * 4);
+      const run = (n, it) => { gl.bindFramebuffer(gl.FRAMEBUFFER, big); gl.viewport(0, 0, W, H); gl.uniform1i(uIt, it);
+        for (let k = 0; k < n; k++) { gl.uniform1f(uSeed, (k % 7) * 0.1); gl.drawArrays(gl.TRIANGLES, 0, 3); }
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); };
+      const check = () => { gl.bindFramebuffer(gl.FRAMEBUFFER, small); gl.viewport(0, 0, 64, 64); gl.uniform1i(uIt, 3000);
+        gl.uniform1f(uSeed, 0.37); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, chk); return chk; };
+      let it = 128, n = 1;
+      for (;;) { const t0 = performance.now(); run(n, it); const dt = performance.now() - t0;
+        if (dt > 30) { n = Math.max(1, Math.round(n * 50 / dt)); break; }
+        if (it < 16384) it *= 2; else if (n < 100000) n *= 2; else break; }
+      const ref = check().slice();
+      const start = performance.now(); let winStart = start, winWork = 0, lastChk = start;
+      const step = () => {
+        const sliceEnd = performance.now() + 120;          // rend la main au navigateur régulièrement
+        while (performance.now() < sliceEnd) {
+          const t0 = performance.now(); run(n, it); const dt = performance.now() - t0; winWork += n * it;
+          if (dt > 0) n = Math.max(1, Math.min(n * 2, Math.round(n * 50 / dt)));
+          const now = performance.now();
+          if (now - lastChk > 1500) { const c = check(); let bad = 0; for (let i = 0; i < c.length; i++) if (c[i] !== ref[i]) bad++;
+            res.checks++; if (bad) res.errors++; lastChk = now; }
+          if (now - winStart >= 2000) { res.windows.push(winWork * W * H / ((now - winStart) / 1000) / 1e9); winWork = 0; winStart = now; }
+        }
+        const el = (performance.now() - start) / 1000;
+        onTick && onTick(Math.min(1, el / seconds));
+        if (el < seconds && !res.lost) setTimeout(step, 0);
+        else { res.ok = !res.lost && res.windows.length > 0; resolve(res); }
+      };
+      setTimeout(step, 0);
+    } catch (e) { res.msg = String(e && e.message || e); resolve(res); }
+  });
+}
+
+// ---------------------------------------------------------------- fréquence de l'écran
+function measureHz() {
+  return new Promise((res) => { let n = 0; const t0 = performance.now();
+    const f = (t) => { n++; if (t - t0 < 1200) requestAnimationFrame(f); else {
+      const raw = n / ((t - t0) / 1000); const std = [30, 48, 60, 75, 90, 100, 120, 144, 165, 240];
+      res(std.reduce((a, b) => Math.abs(b - raw) < Math.abs(a - raw) ? b : a)); } };
+    requestAnimationFrame(f); });
+}
+
+// ---------------------------------------------------------------- lancement des mesures
+const STEP_DEFS = [['cpu1', 'Processeur, 1 cœur (5 s)'], ['cpuN', 'Processeur, tous les cœurs (5 s)'], ['gpu', 'Carte graphique (15 s)'], ['hz', "Fréquence de l'écran"]];
+function renderSteps(states) {
+  $('steps').innerHTML = STEP_DEFS.map(([k, label]) => { const s = states[k] || ['', 'en attente'];
+    return `<div class="step ${s[0]}"><span>${esc(label)}</span><span class="st">${esc(s[1])}</span></div>`; }).join('');
+}
+async function runAll() {
+  if (S.running) return; S.running = true; $('runBtn').disabled = true; $('runInfo').textContent = 'Ne change pas d\'application pendant les mesures.';
+  const st = {}; renderSteps(st);
+  try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch (e) {}
+  st.cpu1 = ['run', 'en cours…']; renderSteps(st);
+  let mono = null, multi = null;
+  try { mono = await runWorkers(1, 5000); st.cpu1 = ['done', Math.round(mono.ups) + ' blocs/s']; }
+  catch (e) { st.cpu1 = ['', 'impossible']; }
+  renderSteps(st);
+  const threads = Math.max(1, S.cores || 4);
+  st.cpuN = ['run', 'en cours…']; renderSteps(st);
+  try { multi = await runWorkers(threads, 5000); st.cpuN = ['done', Math.round(multi.ups) + ' blocs/s']; }
+  catch (e) { st.cpuN = ['', 'impossible']; }
+  renderSteps(st);
+  if (mono && mono.ups > 0) {
+    const scaling = multi ? multi.ups / mono.ups : 1;
+    const sIdx = clamp(mono.ups / CPU_REF.unitsPerSec * CPU_REF.index);
+    S.cpu = { mono: mono.ups, multi: multi ? multi.ups : null, scaling, S: sIdx, M: clamp(sIdx * scaling / 17), bad: (mono.bad || 0) + (multi ? multi.bad : 0) };
+  }
+  st.gpu = ['run', '0 %']; renderSteps(st);
+  const g = await gpuBench(15, (p) => { st.gpu = ['run', Math.round(p * 100) + ' %']; renderSteps(st); });
+  if (g.ok) {
+    const sorted = g.windows.slice().sort((a, b) => a - b); const med = sorted[Math.floor(sorted.length / 2)];
+    const peak = Math.max(...g.windows.slice(0, 3)); const end = g.windows.slice(-2).reduce((a, b) => a + b, 0) / Math.min(2, g.windows.length);
+    S.gpu = { gops: med, G: clamp(med / GPU_GOPS_PER_POINT), drop: peak > 0 ? Math.round(100 * (1 - end / peak)) : 0, errors: g.errors, checks: g.checks, lost: g.lost };
+    st.gpu = ['done', med.toFixed(1) + ' G ops/s'];
+  } else { S.gpu = { failed: true, lost: g.lost, msg: g.msg }; st.gpu = ['', g.lost ? 'plantage du pilote' : 'impossible']; }
+  renderSteps(st);
+  st.hz = ['run', 'en cours…']; renderSteps(st);
+  S.hz = await measureHz(); st.hz = ['done', S.hz + ' Hz']; renderSteps(st);
+  renderSpecs();
+  S.running = false; $('runBtn').disabled = false; $('runBtn').textContent = 'Relancer les mesures'; $('runInfo').textContent = 'Terminé.';
+  renderReport(); $('report').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ---------------------------------------------------------------- plein écran (écran, tactile)
+const ov = $('overlay'), ovc = $('ov'), hint = $('hint'), obar = $('overlayBar');
+let ovCleanup = null;
+function openOverlay() {
+  ov.hidden = false; const d = S.dpr;
+  ovc.width = Math.round(innerWidth * d); ovc.height = Math.round(innerHeight * d);
+  try { const p = ov.requestFullscreen && ov.requestFullscreen(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+}
+function closeOverlay() {
+  if (ovCleanup) { ovCleanup(); ovCleanup = null; }
+  ov.hidden = true; obar.innerHTML = ''; hint.textContent = '';
+  try { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch (e) {}
+}
+function showHint(txt, ms) { hint.hidden = false; hint.textContent = txt; clearTimeout(showHint.t); if (ms) showHint.t = setTimeout(() => { hint.hidden = true; }, ms); }
+
+const PATTERNS = [
+  ['#000000', 'Fond NOIR : points clairs ou colorés ? taches claires sur les bords ?'],
+  ['#ffffff', 'Fond BLANC : points noirs ou colorés ? zones jaunies ou plus sombres ?'],
+  ['#ff0000', 'Fond ROUGE : points noirs ou d\'une autre couleur ?'],
+  ['#00ff00', 'Fond VERT : points noirs ou d\'une autre couleur ?'],
+  ['#0000ff', 'Fond BLEU : points noirs ou d\'une autre couleur ?'],
+  ['#808080', 'Fond GRIS : zones plus sombres, nuages ou bandes ?'],
+  ['grad', 'DÉGRADÉ : il doit être régulier, sans grosses marches.'],
+  ['check', 'DAMIER FIN : l\'image ne doit ni scintiller, ni onduler.']
+];
+function screenTest() {
+  openOverlay(); const ctx = ovc.getContext('2d'); let i = 0;
+  const draw = () => {
+    const [p, txt] = PATTERNS[i]; const W = ovc.width, H = ovc.height;
+    if (p === 'grad') { const gr = ctx.createLinearGradient(0, 0, W, 0); gr.addColorStop(0, '#000'); gr.addColorStop(1, '#fff'); ctx.fillStyle = gr; ctx.fillRect(0, 0, W, H); }
+    else if (p === 'check') { const img = ctx.createImageData(W, H); const d = img.data;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = ((x + y) & 1) ? 255 : 0, o = (y * W + x) * 4; d[o] = d[o + 1] = d[o + 2] = v; d[o + 3] = 255; }
+      ctx.putImageData(img, 0, 0); }
+    else { ctx.fillStyle = p; ctx.fillRect(0, 0, W, H); }
+    showHint(`${txt}  (${i + 1}/${PATTERNS.length} — touche l'écran pour continuer)`, 3500);
+  };
+  const next = () => { i++; if (i >= PATTERNS.length) { closeOverlay(); S.screen = { done: true, answers: {} }; renderTests(); renderReport(); } else draw(); };
+  const onTap = (e) => { if (e.target.closest('#overlayBar')) return; next(); };
+  const onKey = (e) => { if (e.key === 'Escape') { closeOverlay(); } else next(); };
+  ov.addEventListener('pointerup', onTap); addEventListener('keydown', onKey);
+  ovCleanup = () => { ov.removeEventListener('pointerup', onTap); removeEventListener('keydown', onKey); };
+  obar.innerHTML = '<button type="button" id="ovQuit">Quitter</button>'; $('ovQuit').onclick = closeOverlay;
+  draw();
+}
+function touchTest() {
+  openOverlay(); const ctx = ovc.getContext('2d'); const d = S.dpr;
+  const cell = Math.round(44 * d); const cols = Math.ceil(ovc.width / cell), rows = Math.ceil(ovc.height / cell);
+  const hit = new Uint8Array(cols * rows);
+  const paint = (missing) => { for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const h = hit[r * cols + c]; ctx.fillStyle = h ? '#1f7a4d' : (missing ? '#b3261e' : '#2a2f36');
+      ctx.fillRect(c * cell + 1, r * cell + 1, cell - 2, cell - 2); } };
+  ctx.fillStyle = '#111'; ctx.fillRect(0, 0, ovc.width, ovc.height); paint(false);
+  showHint('Glisse le doigt sur TOUTES les cases, jusqu\'aux bords. Les cases touchées deviennent vertes.', 5000);
+  const mark = (e) => { const x = e.clientX * d, y = e.clientY * d; const c = Math.floor(x / cell), r = Math.floor(y / cell);
+    if (c >= 0 && r >= 0 && c < cols && r < rows && !hit[r * cols + c]) { hit[r * cols + c] = 1; ctx.fillStyle = '#1f7a4d'; ctx.fillRect(c * cell + 1, r * cell + 1, cell - 2, cell - 2); } };
+  const onMove = (e) => { if (e.target.closest('#overlayBar')) return; e.preventDefault(); mark(e); if (e.getCoalescedEvents) e.getCoalescedEvents().forEach(mark); };
+  ov.addEventListener('pointerdown', onMove); ov.addEventListener('pointermove', onMove);
+  ovCleanup = () => { ov.removeEventListener('pointerdown', onMove); ov.removeEventListener('pointermove', onMove); };
+  obar.innerHTML = '<button type="button" id="ovDone">Terminer</button><button type="button" id="ovQuit">Quitter</button>';
+  $('ovQuit').onclick = closeOverlay;
+  $('ovDone').onclick = () => {
+    const total = hit.length, ok = hit.reduce((a, b) => a + b, 0), miss = total - ok;
+    if (miss > 0 && !$('ovDone').dataset.shown) {
+      paint(true); $('ovDone').dataset.shown = '1'; $('ovDone').textContent = 'Valider';
+      showHint(`${miss} case(s) en rouge n'ont pas réagi. Repasse dessus : si elles restent rouges, c'est une zone morte. Puis « Valider ».`, 0);
+      return;
+    }
+    S.touchT = { total, ok, miss, pct: Math.round(100 * ok / total) }; closeOverlay(); renderTests(); renderReport();
+  };
+}
+
+// ---------------------------------------------------------------- son
+let actx = null;
+function tone(pan) {
+  try { actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = actx.createOscillator(), g = actx.createGain(); o.frequency.value = 440; g.gain.value = 0.0001;
+    let node = g; if (actx.createStereoPanner) { const p = actx.createStereoPanner(); p.pan.value = pan; g.connect(p); node = p; }
+    node.connect(actx.destination); o.connect(g); const t = actx.currentTime;
+    g.gain.exponentialRampToValueAtTime(0.25, t + 0.05); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.2);
+    o.start(t); o.stop(t + 1.25);
+  } catch (e) {}
+}
+
+// ---------------------------------------------------------------- caméra
+function onPhoto(which, input) {
+  const f = input.files && input.files[0]; if (!f) return;
+  const url = URL.createObjectURL(f); const img = new Image();
+  img.onload = () => { S.cam = S.cam || {}; S.cam[which] = { url, w: img.naturalWidth, h: img.naturalHeight, mp: (img.naturalWidth * img.naturalHeight / 1e6) };
+    renderTests(); renderReport(); };
+  img.src = url; input.value = '';
+}
+
+// ---------------------------------------------------------------- tests guidés (cartes)
+const SCREEN_Q = [
+  ['dead', 'Pixels morts ou bloqués', 30], ['bleed', 'Fuites de lumière sur le noir', 15],
+  ['uniform', 'Zones sombres ou jaunies', 15], ['flicker', 'Scintillement ou lignes', 30]
+];
+function ansBtns(id, opts) { return `<div class="ans">${opts.map(([v, l]) => `<button type="button" data-q="${id}" data-v="${v}">${esc(l)}</button>`).join('')}</div>`; }
+function renderTests() {
+  const cards = [];
+  // Écran
+  let sc = '<span class="state">À faire</span>';
+  if (S.screen) {
+    const a = S.screen.answers; const pending = SCREEN_Q.filter(q => !(q[0] in a));
+    sc = pending.length ? '<span class="state">As-tu vu ces défauts ?</span>' + pending.map(q => `<div class="small">${esc(q[1])}</div>` + ansBtns('scr-' + q[0], [['1', 'Oui'], ['0', 'Non']])).join('')
+      : (Object.values(a).some(v => v) ? '<span class="state ko">Défauts signalés</span>' : '<span class="state ok">Aucun défaut vu</span>');
+  }
+  cards.push(`<div class="test"><h3>Écran : pixels morts</h3><p class="small">8 motifs plein écran : couleurs unies, gris, dégradé, damier.</p>${sc}<div><button class="btn secondary" type="button" id="goScreen">${S.screen ? 'Refaire' : 'Commencer'}</button></div></div>`);
+  // Tactile
+  if (S.touch > 0) {
+    const t = S.touchT;
+    const ts = t ? (t.miss ? `<span class="state ko">${t.miss} zone(s) morte(s) sur ${t.total}</span>` : `<span class="state ok">Tout l'écran réagit (${t.total} zones)</span>`) : '<span class="state">À faire</span>';
+    cards.push(`<div class="test"><h3>Écran tactile</h3><p class="small">Glisse sur toutes les cases : les zones qui ne réagissent pas apparaissent.</p>${ts}<div><button class="btn secondary" type="button" id="goTouch">${t ? 'Refaire' : 'Commencer'}</button></div></div>`);
+  }
+  // Son
+  let ss = '<span class="state">Écoute les trois sons, puis réponds.</span>' + ansBtns('snd', [['ok', 'Clair des deux côtés'], ['one', 'Un seul côté'], ['bad', 'Grésille / rien']]);
+  if (S.sound) ss = S.sound === 'ok' ? '<span class="state ok">Son correct</span>' : `<span class="state ko">${S.sound === 'one' ? 'Un seul haut-parleur' : 'Son défectueux'}</span>`;
+  cards.push(`<div class="test"><h3>Haut-parleurs</h3><p class="small">Monte le volume. Son à gauche, à droite, puis des deux côtés.</p><div class="row"><button class="btn secondary" type="button" data-tone="-1">Gauche</button><button class="btn secondary" type="button" data-tone="1">Droite</button><button class="btn secondary" type="button" data-tone="0">Les deux</button></div>${ss}</div>`);
+  // Caméra
+  const cam = S.cam || {};
+  const camLine = (k, l) => cam[k] ? `<div class="small">${l} : ${cam[k].w} × ${cam[k].h} (${cam[k].mp.toFixed(1)} Mpx)</div><img class="thumb" alt="Photo ${l}" src="${cam[k].url}">` : '';
+  let cs = '';
+  if (cam.back || cam.front) cs = (cam.q ? (cam.q === 'ok' ? '<span class="state ok">Photos nettes</span>' : '<span class="state ko">Défaut signalé</span>') : '<span class="state">La photo est-elle nette, sans tache ni rayure ?</span>' + ansBtns('cam', [['ok', 'Oui, nette'], ['bad', 'Floue / taches']]));
+  else cs = '<span class="state">À faire</span>';
+  cards.push(`<div class="test"><h3>Appareil photo</h3><p class="small">Prends une photo avec chaque caméra (sur PC : webcam ou fichier).</p><div class="row"><button class="btn secondary" type="button" id="goBack">Caméra arrière</button><button class="btn secondary" type="button" id="goFront">Caméra avant</button></div>${camLine('back', 'Arrière')}${camLine('front', 'Avant')}${cs}</div>`);
+  $('tests').innerHTML = cards.join('');
+  $('goScreen').onclick = screenTest;
+  if ($('goTouch')) $('goTouch').onclick = touchTest;
+  $('goBack').onclick = () => $('camBack').click();
+  $('goFront').onclick = () => $('camFront').click();
+  document.querySelectorAll('[data-tone]').forEach(b => b.onclick = () => tone(Number(b.dataset.tone)));
+  document.querySelectorAll('.ans button').forEach(b => b.onclick = () => {
+    const q = b.dataset.q, v = b.dataset.v;
+    if (q.startsWith('scr-')) S.screen.answers[q.slice(4)] = v === '1';
+    else if (q === 'snd') S.sound = v;
+    else if (q === 'cam') S.cam.q = v;
+    renderTests(); renderReport();
+  });
+}
+
+// ---------------------------------------------------------------- notes : la même trame pour tous les appareils
+// T = cible (au-delà : parfait pour cet usage), W = poids, C = composant critique. Échelles identiques au Diagnostic-PC.
+const USAGES = {
+  mobile: [
+    { n: 'Réseaux sociaux, web, vidéos', T: { S: 35, M: 8, G: 0.8, R: 4 }, W: { S: 3, M: 1, G: 1, R: 1 } },
+    { n: 'Photo et vidéo', T: { S: 45, M: 12, G: 1.2, R: 6 }, W: { S: 2, M: 2, G: 1, R: 1 } },
+    { n: 'Jeux légers', C: 'G', T: { G: 0.8, S: 40, R: 4 }, W: { G: 4, S: 2, R: 1 } },
+    { n: 'Jeux 3D exigeants', C: 'G', T: { G: 2.5, S: 60, R: 8 }, W: { G: 6, S: 2, R: 1 } },
+    { n: 'Montage vidéo sur mobile', C: 'M', T: { M: 20, S: 55, G: 1.5, R: 8 }, W: { M: 3, S: 1, G: 2, R: 2 } },
+    { n: 'IA sur l\'appareil', C: 'R', T: { R: 12, M: 25, G: 3 }, W: { R: 4, M: 2, G: 2 } }
+  ],
+  pc: [
+    { n: 'Bureautique, internet, vidéos', T: { S: 40, R: 8, G: 1.5 }, W: { S: 3, R: 2, G: 1 } },
+    { n: 'Jeu en 1080p', C: 'G', T: { G: 24, S: 70, R: 16 }, W: { G: 6, S: 2, R: 1 } },
+    { n: 'Jeu en 1440p', C: 'G', T: { G: 42, S: 80, R: 16 }, W: { G: 6, S: 2, R: 1 } },
+    { n: 'Jeu en 4K / VR', C: 'G', T: { G: 70, S: 85, R: 32 }, W: { G: 7, S: 2, R: 1 } },
+    { n: 'Streaming / création', C: 'G', T: { G: 30, M: 40, S: 75, R: 32 }, W: { G: 3, M: 3, S: 1, R: 1.5 } },
+    { n: 'Montage vidéo 1080p', C: 'M', T: { M: 28, S: 60, R: 16, G: 12 }, W: { M: 3, S: 1, R: 2, G: 1.5 } },
+    { n: 'Montage vidéo 4K', C: 'M', T: { M: 55, S: 75, R: 32, G: 30 }, W: { M: 3, S: 1, R: 2.5, G: 2 } },
+    { n: '3D : Unreal Engine 5, Blender', C: 'G', T: { G: 45, M: 50, R: 32 }, W: { G: 4, M: 2, R: 2 } },
+    { n: 'IA en local', C: 'G', T: { G: 28, R: 32 }, W: { G: 3, R: 2 } }
+  ]
+};
+const PHONE_TIERS = [
+  { n: 'milieu de gamme récent (Snapdragon 7 Gen 3, Dimensity 7300, Apple A15)', S: 55, M: 18, G: 1.2, R: 8 },
+  { n: 'haut de gamme (Snapdragon 8 Gen 2, Dimensity 9200, Apple A16)', S: 65, M: 24, G: 2.2, R: 8 },
+  { n: 'très haut de gamme (Snapdragon 8 Elite, Dimensity 9400, Apple A18 Pro)', S: 85, M: 35, G: 4, R: 12 }
+];
+const LABEL = { S: 'processeur (1 cœur)', M: 'processeur (multi-cœurs)', G: 'puce graphique', R: 'mémoire vive' };
+function compValues() {
+  // mémoire : navigator.deviceMemory est plafonné à 8 Go et absent sur Safari -> non noté si inconnu
+  return { S: S.cpu ? S.cpu.S : null, M: S.cpu ? S.cpu.M : null, G: S.gpu && !S.gpu.failed ? S.gpu.G : null, R: S.mem ? (S.mem >= 8 ? 8 : S.mem) : null };
+}
+function scoreUsage(u, c) {
+  let sw = 0, sum = 0; const lim = [];
+  for (const k in u.T) { if (c[k] == null) continue; const r = clamp(c[k] / u.T[k], 0, 1); sum += u.W[k] * r; sw += u.W[k];
+    if (r < 0.9 && !(k === 'R' && S.mem >= 8 && u.T[k] > 8)) lim.push(k); }
+  if (!sw) return null;
+  let s = 100 * sum / sw;
+  if (u.C && c[u.C] != null) s *= 0.4 + 0.6 * clamp(c[u.C] / u.T[u.C], 0, 1);
+  for (const k in u.T) if (c[k] != null && c[k] / u.T[k] < 0.6 && !(k === 'R' && S.mem >= 8)) s = Math.min(s, 69);
+  return { s: Math.round(s), lim };
+}
+function level(s) {
+  if (s == null) return { t: 'à mesurer', c: '' };
+  if (s >= 85) return { t: 'Excellent', c: 'g' }; if (s >= 70) return { t: 'Très bien', c: 'g' };
+  if (s >= 50) return { t: 'Correct', c: 'o' }; if (s >= 30) return { t: 'Faible', c: 'r' }; return { t: 'Insuffisant', c: 'r' };
+}
+const barColor = (v) => v >= 70 ? 'var(--good)' : v >= 50 ? 'var(--warn)' : 'var(--bad)';
+const bar = (v) => `<div class="bar"><i style="width:${clamp(v)}%;background:${barColor(v)}"></i></div>`;
+function fmt(k, v) { return k === 'R' ? (v >= 8 && S.mem >= 8 ? '8 Go ou +' : v + ' Go') : (k === 'G' ? v.toFixed(1) : Math.round(v)) + (k === 'R' ? '' : '/100'); }
+
+function buildReport() {
+  const c = compValues(); const isPc = S.type === 'pc'; const set = isPc ? USAGES.pc : USAGES.mobile;
+  const health = []; let hs = 100;
+  const add = (lvl, txt, malus) => { health.push([lvl, txt]); hs -= malus || 0; };
+  if (S.cpu) { if (S.cpu.bad > 0) add('r', `Processeur instable : ${S.cpu.bad} calcul(s) faux.`, 50); else add('g', 'Processeur stable : calculs vérifiés sans erreur.'); }
+  if (S.gpu) {
+    if (S.gpu.lost) add('r', 'Le pilote graphique a planté pendant le test.', 25);
+    else if (S.gpu.failed) add('o', 'Test graphique impossible sur ce navigateur' + (S.gpu.msg ? ' (' + S.gpu.msg + ')' : '') + '.');
+    else {
+      if (S.gpu.errors > 0) add('r', `Puce graphique instable : ${S.gpu.errors} vérification(s) fausse(s) sur ${S.gpu.checks}.`, 30); else add('g', `Puce graphique stable : ${S.gpu.checks} vérifications sans erreur.`);
+      if (S.gpu.drop >= 20) add('o', `Perte de ${S.gpu.drop} % de puissance en chauffant pendant le test.`, 8);
+    }
+  }
+  if (S.screen) { const a = S.screen.answers; let any = false;
+    for (const [k, l, m] of SCREEN_Q) if (a[k]) { add('o', 'Écran : ' + l.toLowerCase() + '.', Math.round(m / 3)); any = true; }
+    if (!any && Object.keys(a).length === SCREEN_Q.length) add('g', 'Écran : aucun défaut vu au test visuel.'); }
+  if (S.touchT) { if (S.touchT.miss) add('r', `Tactile : ${S.touchT.miss} zone(s) morte(s).`, 20); else add('g', 'Tactile : tout l\'écran réagit.'); }
+  if (S.sound) { if (S.sound === 'ok') add('g', 'Haut-parleurs : son correct.'); else add('o', S.sound === 'one' ? 'Un seul haut-parleur fonctionne.' : 'Son défectueux (grésillement ou silence).', 10); }
+  if (S.cam && S.cam.q) { if (S.cam.q === 'ok') add('g', 'Appareil photo : photos nettes.'); else add('o', 'Appareil photo : photo floue ou taches.', 10); }
+  hs = clamp(hs);
+  const usages = set.map(u => { const r = scoreUsage(u, c); return { u, r }; });
+  // puissance globale (même pondération que le Diagnostic-PC, sans le stockage que le navigateur ne voit pas)
+  let power = null;
+  if (c.S != null && c.G != null) {
+    const ridx = c.R == null ? 55 : [[2, 10], [4, 30], [8, 55]].reduce((a, [g, v]) => c.R >= g ? v : a, 5);
+    power = Math.round(clamp((0.40 * c.G + 0.20 * c.M + 0.15 * c.S + 0.125 * ridx) / 0.875));
+  }
+  // conseils
+  const advice = [];
+  const weak = usages.filter(x => x.r && x.r.s < 70);
+  if (!isPc && weak.length) {
+    for (const x of weak) {
+      const need = {}; for (const k in x.u.T) need[k] = x.u.T[k];
+      const tier = PHONE_TIERS.find(t => Object.keys(need).every(k => k === 'R' || t[k] >= need[k] * 0.9)) || PHONE_TIERS[PHONE_TIERS.length - 1];
+      advice.push(`${x.u.n} : un téléphone ne s'améliore pas pièce par pièce ; pour cet usage, vise un modèle ${tier.n}.`);
+    }
+    advice.push('Gestes gratuits : libérer de l\'espace (au moins 15 % libre), mettre à jour le système, fermer les applications en arrière-plan, redémarrer une fois par semaine.');
+  }
+  if (isPc) advice.push('Pour la santé des disques, les températures, la mémoire vidéo et les pièces à acheter : lance l\'analyse approfondie Diagnostic-PC (Windows) ; la version Linux arrive.');
+  return { c, isPc, usages, health, hs, power, advice };
+}
+
+function renderReport() {
+  const R = buildReport();
+  const measured = !!S.cpu;
+  let h = '';
+  if (!measured) h += '<div class="verdict n">Lance les mesures automatiques (étape 1) pour obtenir les notes. Les tests guidés s\'ajoutent au rapport au fur et à mesure.</div>';
+  else {
+    const good = R.usages.filter(x => x.r && x.r.s >= 70).map(x => x.u.n), bad = R.usages.filter(x => x.r && x.r.s < 50).map(x => x.u.n);
+    const cls = good.length >= Math.ceil(R.usages.length / 2) ? 'g' : good.length ? 'o' : 'r';
+    h += `<div class="verdict ${cls}">Idéal pour : ${esc(good.join(', ') || 'aucun usage exigeant')}${bad.length ? ' · Déconseillé pour : ' + esc(bad.join(', ')) : ''}</div>`;
+  }
+  h += '<div class="scores">';
+  h += `<div class="score"><span class="eyebrow">Puissance globale</span><span class="n">${R.power ?? '–'}<small>/100</small></span>${R.power != null ? bar(R.power) : ''}<span class="small">100 = PC très haut de gamme actuel</span></div>`;
+  h += `<div class="score"><span class="eyebrow">Santé</span><span class="n">${R.health.length ? R.hs : '–'}<small>/100</small></span>${R.health.length ? bar(R.hs) : ''}<span class="small">Stabilité et tests guidés</span></div>`;
+  h += '</div>';
+  h += `<h3>Ce que cet appareil peut faire (${esc(TYPE_LABEL[S.type])})</h3><div class="tablewrap"><table><thead><tr><th>Usage</th><th style="min-width:120px">Note</th><th>Verdict</th><th>Limité par</th></tr></thead><tbody>`;
+  for (const x of R.usages) {
+    const lv = level(x.r ? x.r.s : null);
+    const lim = x.r && x.r.s < 70 ? x.r.lim.map(k => `${LABEL[k]} ${fmt(k, R.c[k])} (conseillé ${fmt(k, x.u.T[k])})`).join(' ; ') : '';
+    h += `<tr><td>${esc(x.u.n)}</td><td class="num">${x.r ? x.r.s + '/100' + bar(x.r.s) : '–'}</td><td><span class="lv ${lv.c}">${lv.t}</span></td><td class="small">${esc(lim)}</td></tr>`;
+  }
+  h += '</tbody></table></div>';
+  if (R.advice.length && measured) h += '<h3>Conseils</h3><ul class="alerts">' + R.advice.map(a => `<li>${esc(a)}</li>`).join('') + '</ul>';
+  if (R.health.length) h += '<h3>Santé : points relevés</h3><ul class="alerts">' + R.health.map(([l, t]) => `<li class="${l}">${esc(t)}</li>`).join('') + '</ul>';
+  h += '<h3>Mesures brutes</h3><pre class="raw">' + esc(rawText(R)) + '</pre>';
+  h += '<p class="small">Les indices sont des estimations calibrées sur la même échelle que le Diagnostic-PC (100 = haut de gamme actuel). Le navigateur ne donne pas accès à la santé de la batterie ni du stockage.</p>';
+  $('repBody').innerHTML = h;
+  S.lastReport = R;
+}
+function rawText(R) {
+  const L = [];
+  L.push(`Appareil : ${TYPE_LABEL[S.type]} ${S.os}${S.model ? ' ' + S.model : ''} | ${S.browser} | ${S.cores || '?'} cœurs | RAM ${S.mem ? S.mem + ' Go (plafonné à 8)' : '?'} | GPU ${S.renderer}`);
+  L.push(`Écran : ${Math.round(screen.width * S.dpr)} x ${Math.round(screen.height * S.dpr)} px, ${S.hz || '?'} Hz, densité x${S.dpr}`);
+  if (S.cpu) L.push(`Processeur : 1 cœur ${Math.round(S.cpu.mono)} blocs/s | tous ${Math.round(S.cpu.multi || 0)} blocs/s | gain x${S.cpu.scaling.toFixed(1)} | indices S ${S.cpu.S.toFixed(1)} M ${S.cpu.M.toFixed(1)} | erreurs ${S.cpu.bad}`);
+  if (S.gpu && !S.gpu.failed) L.push(`Graphique : ${S.gpu.gops.toFixed(2)} G ops/s | indice ${S.gpu.G.toFixed(1)} | chute ${S.gpu.drop} % | erreurs ${S.gpu.errors}/${S.gpu.checks}`);
+  if (S.touchT) L.push(`Tactile : ${S.touchT.ok}/${S.touchT.total} zones (${S.touchT.pct} %)`);
+  if (S.cam) for (const k of ['back', 'front']) if (S.cam[k]) L.push(`Caméra ${k === 'back' ? 'arrière' : 'avant'} : ${S.cam[k].w} x ${S.cam[k].h}`);
+  return L.join('\n');
+}
+function reportText() {
+  const R = S.lastReport || buildReport(); const L = [];
+  L.push(`DIAGNOSTIC UNIVERSEL v1 - ${new Date().toLocaleString('fr-FR')}`);
+  L.push(`PUISSANCE : ${R.power ?? '?'} /100 | SANTÉ : ${R.health.length ? R.hs : '?'} /100`, '', 'USAGES :');
+  for (const x of R.usages) L.push(` - ${x.u.n} : ${x.r ? x.r.s + '/100 (' + level(x.r.s).t + ')' : 'non mesuré'}`);
+  L.push('', 'SANTÉ :'); for (const [l, t] of R.health) L.push(` [${{ r: 'ROUGE', o: 'ORANGE', g: 'OK' }[l]}] ${t}`);
+  if (R.advice.length) { L.push('', 'CONSEILS :'); for (const a of R.advice) L.push(' - ' + a); }
+  L.push('', 'MESURES BRUTES :', rawText(R));
+  return L.join('\n');
+}
+
+// ---------------------------------------------------------------- export
+$('copyBtn').onclick = () => {
+  const txt = reportText();
+  const fallback = () => { const a = $('copyArea'); a.hidden = false; a.value = txt; a.focus(); a.select(); $('copyInfo').textContent = 'Texte sélectionné : copie-le avec le menu.'; };
+  try { navigator.clipboard.writeText(txt).then(() => { $('copyInfo').textContent = 'Rapport copié.'; }, fallback); } catch (e) { fallback(); }
+};
+let downloads = null;
+(async () => { try { downloads = window.claude && window.claude.use ? await window.claude.use('downloads') : null; } catch (e) { downloads = null; }
+  if (downloads) $('saveBtn').hidden = false; })();
+$('saveBtn').onclick = async () => {
+  try { await downloads.save({ filename: 'diagnostic-' + new Date().toISOString().slice(0, 10) + '.txt', data: reportText() }); $('copyInfo').textContent = 'Rapport enregistré.'; }
+  catch (e) { $('copyInfo').textContent = 'Enregistrement annulé.'; }
+};
+
+// ---------------------------------------------------------------- démarrage
+detect();
+document.querySelectorAll('[data-ty]').forEach(b => b.onclick = () => { S.type = b.dataset.ty; renderSpecs(); renderTests(); renderReport(); });
+$('runBtn').onclick = runAll;
+$('camBack').onchange = (e) => onPhoto('back', e.target);
+$('camFront').onchange = (e) => onPhoto('front', e.target);
+renderSpecs(); renderSteps({}); renderTests(); renderReport();
+window.__diag = S;   // pour l'étalonnage
+})();
+</script>
