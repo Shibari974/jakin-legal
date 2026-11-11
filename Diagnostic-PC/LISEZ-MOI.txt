@@ -1,4 +1,4 @@
-﻿DIAGNOSTIC PC COMPLET (v3.0) - MODE D'EMPLOI
+﻿DIAGNOSTIC PC COMPLET (v3.1) - MODE D'EMPLOI
 ============================================
 
 Un seul outil, entièrement automatique, qui remplace plusieurs petits logiciels
@@ -12,7 +12,8 @@ PC de bureau et portables, Windows 10 / 11.
      LibreHardwareMonitor (vraies températures, pompe, ventilateurs) depuis sa page officielle
      et le garde sur la clé pour les fois suivantes.
    - Sur Windows récent, la température exacte du PROCESSEUR demande en plus le pilote PawnIO
-     (pawnio.eu) ; sans lui, l'outil marche quand même (température approximative).
+     (pawnio.eu) : au premier lancement, l'outil propose de l'installer tout seul (réponds O).
+     Sans lui, l'outil marche quand même (température du processeur approximative).
 
 2) SUR LE PC À TESTER
    - Portable : chargeur branché, posé sur une table. Volume vers 50 %, pièce calme.

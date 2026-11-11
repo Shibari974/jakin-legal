@@ -16,7 +16,7 @@
 param([switch]$Reprise)
 $ErrorActionPreference = 'Continue'
 $Error.Clear()
-$VERSION = '3.0'
+$VERSION = '3.1'
 try { $Host.UI.RawUI.WindowTitle = 'Diagnostic PC' } catch {}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportDir = Join-Path $root 'Rapports'
@@ -240,6 +240,34 @@ function Get-LhmAuto([string]$dir) {
     } catch { Write-Host "   Téléchargement impossible (pas dʼInternet ?) : températures approximatives." -ForegroundColor DarkGray; return $false }
     finally { $ProgressPreference = $oldPP }
 }
+# Installation du pilote PawnIO (nécessaire à LibreHardwareMonitor pour la température du processeur)
+function Install-PawnIO {
+    $ok = $false
+    if (Get-Command winget.exe -ErrorAction SilentlyContinue) {
+        Write-Host '   Installation de PawnIO via winget (gestionnaire de logiciels de Windows)...' -ForegroundColor DarkGray
+        & winget.exe install --id namazso.PawnIO -e --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335189) { $ok = $true }   # installé, ou déjà installé
+    }
+    if (-not $ok) {
+        $oldPP = $ProgressPreference
+        try {
+            $ProgressPreference = 'SilentlyContinue'
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $hdr = @{ 'User-Agent' = 'DiagnosticPC' }
+            $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/namazso/PawnIO.Setup/releases/latest' -Headers $hdr -TimeoutSec 20
+            $asset = @($rel.assets) | Where-Object { $_.name -match '\.exe$' } | Select-Object -First 1
+            if ($asset) {
+                $exe = Join-Path $env:TEMP $asset.name
+                Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $exe -UseBasicParsing -TimeoutSec 120 -Headers $hdr
+                Write-Host '   Le programme dʼinstallation officiel de PawnIO sʼouvre : clique sur « Install », puis ferme-le.' -ForegroundColor Yellow
+                $pr = Start-Process -FilePath $exe -Wait -PassThru
+                $ok = ($pr.ExitCode -eq 0)
+                Remove-Item $exe -Force -ErrorAction SilentlyContinue
+            }
+        } catch {} finally { $ProgressPreference = $oldPP }
+    }
+    $ok
+}
 function Init-Lhm {
     $dir = Join-Path $root 'LibreHardwareMonitor'
     $dll = Get-ChildItem $dir -Recurse -Filter 'LibreHardwareMonitorLib.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -247,7 +275,7 @@ function Init-Lhm {
     if (-not $dll) { return }
     try {
         Get-ChildItem $dll.DirectoryName -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
-        Add-Type -Path $dll.FullName -ErrorAction Stop
+        if (-not ('LibreHardwareMonitor.Hardware.Computer' -as [type])) { Add-Type -Path $dll.FullName -ErrorAction Stop }
         $cp = New-Object LibreHardwareMonitor.Hardware.Computer
         foreach ($p in 'IsCpuEnabled', 'IsGpuEnabled', 'IsMotherboardEnabled', 'IsControllerEnabled') { try { $cp.$p = $true } catch {} }
         $cp.Open()
@@ -464,6 +492,18 @@ if (-not $resume) {
 Write-Host 'Avant de laisser tourner : mets le volume du PC vers 50 % (test automatique du son), dans une pièce calme, chargeur branché.' -ForegroundColor Yellow
 Write-Host ''
 Init-Lhm
+if ($lhmState -eq 'nocpu' -and -not $resume) {
+    $pa = Read-Host 'La température exacte du processeur demande le pilote gratuit PawnIO (pawnio.eu). Lʼinstaller maintenant ? (O/N)'
+    if ($pa -match '^[oOyY]') {
+        if (Install-PawnIO) {
+            try { $lhm.Close() } catch {}
+            $lhm = $null; $lhmCpuOk = $false; $lhmState = 'absent'
+            Init-Lhm
+            if ($lhmCpuOk) { Write-Host '   PawnIO installé : la température du processeur est lue.' -ForegroundColor Green }
+            else { Write-Host '   PawnIO installé, mais la température nʼest pas encore lisible (un redémarrage peut être nécessaire).' -ForegroundColor Yellow }
+        } else { Write-Host '   Installation impossible : la température du processeur restera approximative.' -ForegroundColor Yellow }
+    }
+}
 
 # ---------------------------------------------------------------- 1
 Step 1 'Windows (version, activation)'
@@ -998,12 +1038,12 @@ $tmp = Join-Path $env:TEMP 'diag_vitesse_disque.bin'
 $writeMBs = $null; $fs = $null
 try {
     $buf = New-Object byte[] (8MB); (New-Object Random 42).NextBytes($buf)
-    $total = 2GB
+    $wTotal = 2GB
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $fs = New-Object IO.FileStream($tmp, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None, 8MB, [IO.FileOptions]::WriteThrough)
-    for ($w = 0; $w -lt $total; $w += $buf.Length) { $fs.Write($buf, 0, $buf.Length) }
+    for ($w = 0; $w -lt $wTotal; $w += $buf.Length) { $fs.Write($buf, 0, $buf.Length) }
     $fs.Flush($true); $fs.Close(); $sw.Stop()
-    $writeMBs = [int](($total / 1MB) / $sw.Elapsed.TotalSeconds)
+    $writeMBs = [int](($wTotal / 1MB) / $sw.Elapsed.TotalSeconds)
     Write-Host "   Écriture : $writeMBs Mo/s"
 } catch { Write-Host "   Test impossible : $_" -ForegroundColor Yellow }
 finally { if ($fs) { $fs.Dispose() }; Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
@@ -1862,20 +1902,20 @@ if ($doScreen -match '^[oOyY]') {
     Start-Sleep -Seconds 3
     try {
         Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-        $C = [Drawing.Color]
+        $Col = [Drawing.Color]
         $patterns = @(
-            [pscustomobject]@{ K = 'solid'; Col = $C::Black; Txt = 'Fond NOIR : points clairs ou colorés ? taches claires sur les bords (fuite de lumière) ?' }
-            [pscustomobject]@{ K = 'solid'; Col = $C::White; Txt = 'Fond BLANC : points noirs ou colorés ? taches, zones jaunies ou plus sombres ?' }
-            [pscustomobject]@{ K = 'solid'; Col = $C::Red;   Txt = 'Fond ROUGE : points noirs ou dʼune autre couleur ?' }
-            [pscustomobject]@{ K = 'solid'; Col = $C::Lime;  Txt = 'Fond VERT : points noirs ou dʼune autre couleur ?' }
-            [pscustomobject]@{ K = 'solid'; Col = $C::Blue;  Txt = 'Fond BLEU : points noirs ou dʼune autre couleur ?' }
+            [pscustomobject]@{ K = 'solid'; Col = $Col::Black; Txt = 'Fond NOIR : points clairs ou colorés ? taches claires sur les bords (fuite de lumière) ?' }
+            [pscustomobject]@{ K = 'solid'; Col = $Col::White; Txt = 'Fond BLANC : points noirs ou colorés ? taches, zones jaunies ou plus sombres ?' }
+            [pscustomobject]@{ K = 'solid'; Col = $Col::Red;   Txt = 'Fond ROUGE : points noirs ou dʼune autre couleur ?' }
+            [pscustomobject]@{ K = 'solid'; Col = $Col::Lime;  Txt = 'Fond VERT : points noirs ou dʼune autre couleur ?' }
+            [pscustomobject]@{ K = 'solid'; Col = $Col::Blue;  Txt = 'Fond BLEU : points noirs ou dʼune autre couleur ?' }
             [pscustomobject]@{ K = 'solid'; Col = [Drawing.Color]::FromArgb(128, 128, 128); Txt = 'Fond GRIS : zones plus sombres, nuages, bandes verticales ou horizontales ?' }
-            [pscustomobject]@{ K = 'grad';  Col = $C::Black; Txt = 'DÉGRADÉ : il doit être régulier, sans grosses marches ni teintes colorées.' }
-            [pscustomobject]@{ K = 'check'; Col = $C::Black; Txt = 'DAMIER FIN : lʼimage ne doit ni scintiller, ni onduler, ni montrer de lignes.' }
+            [pscustomobject]@{ K = 'grad';  Col = $Col::Black; Txt = 'DÉGRADÉ : il doit être régulier, sans grosses marches ni teintes colorées.' }
+            [pscustomobject]@{ K = 'check'; Col = $Col::Black; Txt = 'DAMIER FIN : lʼimage ne doit ni scintiller, ni onduler, ni montrer de lignes.' }
         )
         $script:ci = 0; $script:hint = $true
         $f = New-Object Windows.Forms.Form
-        $f.FormBorderStyle = 'None'; $f.WindowState = 'Maximized'; $f.TopMost = $true; $f.BackColor = $C::Black; $f.KeyPreview = $true
+        $f.FormBorderStyle = 'None'; $f.WindowState = 'Maximized'; $f.TopMost = $true; $f.BackColor = $Col::Black; $f.KeyPreview = $true
         $font = New-Object Drawing.Font('Segoe UI', 16)
         $timer = New-Object Windows.Forms.Timer; $timer.Interval = 3500
         $timer.Add_Tick({ $script:hint = $false; $timer.Stop(); $f.Invalidate() })
@@ -1886,10 +1926,10 @@ if ($doScreen -match '^[oOyY]') {
             $p = $patterns[$script:ci]
             if ($p.K -eq 'solid') { $g.Clear($p.Col) }
             elseif ($p.K -eq 'grad') {
-                $br = New-Object Drawing.Drawing2D.LinearGradientBrush((New-Object Drawing.Rectangle(0, 0, $w, $h)), $C::Black, $C::White, [single]0)
+                $br = New-Object Drawing.Drawing2D.LinearGradientBrush((New-Object Drawing.Rectangle(0, 0, $w, $h)), $Col::Black, $Col::White, [single]0)
                 $g.FillRectangle($br, 0, 0, $w, $h); $br.Dispose()
             } else {
-                $br = New-Object Drawing.Drawing2D.HatchBrush([Drawing.Drawing2D.HatchStyle]::Percent50, $C::White, $C::Black)
+                $br = New-Object Drawing.Drawing2D.HatchBrush([Drawing.Drawing2D.HatchStyle]::Percent50, $Col::White, $Col::Black)
                 $g.FillRectangle($br, 0, 0, $w, $h); $br.Dispose()
             }
             if ($script:hint) {
