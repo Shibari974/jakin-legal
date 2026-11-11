@@ -15,14 +15,14 @@
 # =====================================================================
 $ErrorActionPreference = 'Continue'
 $Error.Clear()
-$VERSION = '2.4'
+$VERSION = '2.5'
 try { $Host.UI.RawUI.WindowTitle = 'Diagnostic PC' } catch {}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportDir = Join-Path $root 'Rapports'
 New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
 $stamp = Get-Date -Format 'yyyy-MM-dd_HH-mm'
 $reportPath = Join-Path $reportDir ("Diagnostic_{0}_{1}.html" -f $env:COMPUTERNAME, $stamp)
-$TOTAL = 15
+$TOTAL = 17
 
 # =====================================================================
 #  BASE DE DONNÉES (à mettre à jour quand de nouveaux modèles sortent)
@@ -373,9 +373,16 @@ foreach ($tok in ($sel -split '[\s,;]+')) {
     if ($tok -match '^\d+$' -and @($USAGES | Where-Object { $_.Id -eq [int]$tok }).Count) { $selected += [int]$tok }
 }
 $selected = @($selected | Sort-Object -Unique)
-$ans = Read-Host 'Durée du test de charge processeur en minutes (Entrée = 5)'
-$stressMin = 5
-if ($ans -match '^\d+$' -and [int]$ans -ge 1) { $stressMin = [int]$ans }
+Write-Host ''
+Write-Host 'Type dʼanalyse :' -ForegroundColor Cyan
+Write-Host '   1. Rapide   (environ 20 min)'
+Write-Host '   2. Complète (environ 45 min : processeur 15 min, carte graphique 10 min, RAM vérifiée en profondeur)'
+$ans = Read-Host 'Ton choix (Entrée = 1)'
+$fullMode = ($ans -match '^\s*2')
+$stressMin = $(if ($fullMode) { 15 } else { 5 })
+$gpuSecMode = $(if ($fullMode) { 600 } else { 90 })
+$ramPasses = $(if ($fullMode) { 6 } else { 3 })
+Write-Host 'Avant de laisser tourner : mets le volume du PC vers 50 % (test automatique du son), dans une pièce calme, chargeur branché.' -ForegroundColor Yellow
 Write-Host ''
 Init-Lhm
 
@@ -917,55 +924,187 @@ Add-Table 'Vitesse du disque Windows' ([ordered]@{
 })
 
 # ---------------------------------------------------------------- 10
-Step 10 'Test de la mémoire vive (écriture / vérification)'
+Step 10 "Test de la mémoire vive ($ramPasses motifs de vérification, tous les cœurs)"
+$ramCode = @'
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+public static class RamTest {
+    public static volatile int Pct;
+    public static long Tested, Errors;
+    static Thread _t;
+    static ulong Val(int p, int blk, int j) {
+        switch (p) {
+            case 0: return 0x0000000000000000UL;
+            case 1: return 0xFFFFFFFFFFFFFFFFUL;
+            case 2: return 0x5555555555555555UL;
+            case 3: return 0xAAAAAAAAAAAAAAAAUL;
+            case 4: return (((ulong)blk << 32) | (uint)j) * 0x9E3779B97F4A7C15UL;
+            default: { ulong x = (((ulong)blk << 32) | (uint)j) + 0x632BE59BD9B4E019UL; x ^= x >> 33; x *= 0xFF51AFD7ED558CCDUL; x ^= x >> 33; return ~x; }
+        }
+    }
+    public static void Start(long bytes, int passes, int threads) {
+        Pct = 0; Tested = 0; Errors = 0;
+        _t = new Thread(delegate() { Run(bytes, passes, threads); });
+        _t.IsBackground = true; _t.Start();
+    }
+    public static bool IsRunning() { return _t != null && _t.IsAlive; }
+    static void Run(long bytes, int passes, int threads) {
+        const int len = 32 * 1024 * 1024;   // blocs de 256 Mo
+        int n = (int)(bytes / (len * 8L));
+        if (n < 1) return;
+        ulong[][] blocks = new ulong[n][];
+        int got = 0;
+        try { for (; got < n; got++) blocks[got] = new ulong[len]; } catch (OutOfMemoryException) { }
+        n = got; if (n < 1) return;
+        ParallelOptions po = new ParallelOptions(); po.MaxDegreeOfParallelism = Math.Max(1, threads);
+        long errors = 0;
+        int count = Math.Min(Math.Max(passes, 1), 6);
+        int[] order = { 4, 5, 2, 3, 0, 1 };   // adresses, aléatoire, damiers de bits, tout à 0, tout à 1
+        for (int k = 0; k < count; k++) {
+            int p = order[k];
+            Parallel.For(0, n, po, delegate(int i) { ulong[] b = blocks[i]; for (int j = 0; j < b.Length; j++) b[j] = Val(p, i, j); });
+            Pct = (int)(100.0 * (k + 0.5) / count);
+            Parallel.For(0, n, po, delegate(int i) {
+                ulong[] b = blocks[i]; long e = 0;
+                for (int j = 0; j < b.Length; j++) if (b[j] != Val(p, i, j)) e++;
+                if (e > 0) Interlocked.Add(ref errors, e);
+            });
+            Pct = (int)(100.0 * (k + 1) / count);
+        }
+        Tested = (long)n * len * 8L; Errors = errors;
+        blocks = null; GC.Collect();
+    }
+}
+'@
 [GC]::Collect()
 $freeBytes = [int64]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory) * 1KB
-$testBytes = [math]::Min([int64]8GB, $freeBytes - [int64]2GB)
-$chunk = 256MB
-$ramErrors = 0; $ramTested = 0
-if ($testBytes -ge 512MB) {
-    $nb = [int][math]::Floor($testBytes / $chunk)
-    $sha = [Security.Cryptography.SHA256]::Create()
-    $pattern = New-Object byte[] (1MB)
-    foreach ($pass in 1..2) {
-        (New-Object Random (100 + $pass)).NextBytes($pattern)
-        $ref = New-Object byte[] $chunk
-        for ($o = 0; $o -lt $chunk; $o += $pattern.Length) { [Buffer]::BlockCopy($pattern, 0, $ref, $o, $pattern.Length) }
-        $expected = [BitConverter]::ToString($sha.ComputeHash($ref)); $ref = $null
-        $blocks = New-Object System.Collections.Generic.List[byte[]]
-        for ($i = 0; $i -lt $nb; $i++) {
-            Write-Progress -Activity "Test RAM - passe $pass/2" -Status "Écriture bloc $($i+1)/$nb" -PercentComplete (100 * $i / $nb)
-            $b = New-Object byte[] $chunk
-            for ($o = 0; $o -lt $chunk; $o += $pattern.Length) { [Buffer]::BlockCopy($pattern, 0, $b, $o, $pattern.Length) }
-            $blocks.Add($b)
-        }
-        for ($i = 0; $i -lt $nb; $i++) {
-            Write-Progress -Activity "Test RAM - passe $pass/2" -Status "Vérification bloc $($i+1)/$nb" -PercentComplete (100 * $i / $nb)
-            if ([BitConverter]::ToString($sha.ComputeHash($blocks[$i])) -ne $expected) { $ramErrors++ }
-        }
-        $blocks.Clear(); $blocks = $null; [GC]::Collect()
+$testBytes = [int64]($freeBytes - [int64]1536MB)
+if (-not $fullMode) { $testBytes = [math]::Min($testBytes, [int64]12GB) }
+$ramErrors = 0; $ramTested = 0; $ramOk = $false
+try { if (-not ('RamTest' -as [type])) { Add-Type -TypeDefinition $ramCode -ErrorAction Stop }; $ramOk = $true } catch { Write-Host "   Test RAM impossible : $($_.Exception.Message)" -ForegroundColor Yellow }
+if ($ramOk -and $testBytes -ge 512MB) {
+    [RamTest]::Start($testBytes, $ramPasses, $threads)
+    while ([RamTest]::IsRunning()) {
+        Start-Sleep -Milliseconds 500
+        Write-Progress -Activity 'Test de la mémoire vive' -Status "$([RamTest]::Pct) %" -PercentComplete ([math]::Min(100, [RamTest]::Pct))
     }
-    Write-Progress -Activity 'Test RAM' -Completed
-    $ramTested = GB ($nb * $chunk)
-    Write-Host "   $ramTested Go testés, $ramErrors erreur(s)"
-    if ($ramErrors -gt 0) { Add-Alert ROUGE "RAM : $ramErrors erreur(s) détectée(s) !" 50 } else { Add-Alert OK "RAM : $ramTested Go testés sans erreur." }
-} else { Write-Host '   Pas assez de mémoire libre pour tester.' -ForegroundColor Yellow }
+    Write-Progress -Activity 'Test de la mémoire vive' -Completed
+    $ramTested = GB ([RamTest]::Tested); $ramErrors = [RamTest]::Errors
+    Write-Host "   $ramTested Go testés avec $ramPasses motifs, $ramErrors erreur(s)"
+    if ($ramErrors -gt 0) { Add-Alert ROUGE "RAM : $ramErrors erreur(s) détectée(s) !" 50 } elseif ($ramTested -gt 0) { Add-Alert OK "RAM : $ramTested Go testés avec $ramPasses motifs, sans erreur." }
+} elseif ($ramOk) { Write-Host '   Trop peu de mémoire libre pour un test en direct : le test complet de Windows sera proposé à la fin.' -ForegroundColor Yellow }
+# Résultat du test complet de Windows (Diagnostic de mémoire Windows), sʼil a déjà été lancé
+$mdRes = $null
+try {
+    $ev = Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-MemoryDiagnostics-Results' } -MaxEvents 1 -ErrorAction Stop
+    $mdRes = [pscustomobject]@{ Date = $ev.TimeCreated; Bad = (@(1102, 1202) -contains $ev.Id) }
+} catch {}
+if ($mdRes) {
+    if ($mdRes.Bad) { Add-Alert ROUGE "Le test complet de la mémoire de Windows du $($mdRes.Date.ToString('dd/MM/yyyy')) a trouvé des erreurs matérielles." 40; $ramErrors = [math]::Max($ramErrors, 1) }
+    else { Add-Alert OK "Test complet de la mémoire de Windows du $($mdRes.Date.ToString('dd/MM/yyyy')) : aucune erreur." }
+}
 Add-Table 'Mémoire vive : tests' ([ordered]@{
-    'Quantité testée'      = "$ramTested Go (mémoire libre uniquement ; MemTest86 reste la référence)"
-    'Erreurs'              = $ramErrors
-    'Bande passante'       = $(if ($memBw) { "$memBw Go/s" } else { 'non mesurée' })
+    'Test en direct'                 = $(if ($ramTested) { "$ramTested Go, $ramPasses motifs, $ramErrors erreur(s)" } else { 'non réalisé' })
+    'Test complet de Windows'        = $(if ($mdRes) { "du $($mdRes.Date.ToString('dd/MM/yyyy')) : $(if ($mdRes.Bad) { 'ERREURS' } else { 'aucune erreur' })" } else { 'jamais lancé sur ce PC' })
+    'Bande passante'                 = $(if ($memBw) { "$memBw Go/s" } else { 'non mesurée' })
 })
+
+# Outils audio (micro + haut-parleurs) utilisés pour le bruit et le test du son
+$audioCode = @'
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
+public static class AudioTest {
+    [StructLayout(LayoutKind.Sequential)] struct WAVEFORMATEX { public ushort wFormatTag; public ushort nChannels; public uint nSamplesPerSec; public uint nAvgBytesPerSec; public ushort nBlockAlign; public ushort wBitsPerSample; public ushort cbSize; }
+    [StructLayout(LayoutKind.Sequential)] struct WAVEHDR { public IntPtr lpData; public uint dwBufferLength; public uint dwBytesRecorded; public IntPtr dwUser; public uint dwFlags; public uint dwLoops; public IntPtr lpNext; public IntPtr reserved; }
+    [DllImport("winmm.dll")] static extern int waveInGetNumDevs();
+    [DllImport("winmm.dll")] static extern int waveInOpen(out IntPtr h, int dev, ref WAVEFORMATEX fmt, IntPtr cb, IntPtr inst, int flags);
+    [DllImport("winmm.dll")] static extern int waveInPrepareHeader(IntPtr h, IntPtr hdr, int size);
+    [DllImport("winmm.dll")] static extern int waveInUnprepareHeader(IntPtr h, IntPtr hdr, int size);
+    [DllImport("winmm.dll")] static extern int waveInAddBuffer(IntPtr h, IntPtr hdr, int size);
+    [DllImport("winmm.dll")] static extern int waveInStart(IntPtr h);
+    [DllImport("winmm.dll")] static extern int waveInStop(IntPtr h);
+    [DllImport("winmm.dll")] static extern int waveInReset(IntPtr h);
+    [DllImport("winmm.dll")] static extern int waveInClose(IntPtr h);
+    const int RATE = 16000;
+    public static int Devices() { return waveInGetNumDevs(); }
+    // enregistre ms millisecondes au micro par défaut (mono, 16 bits), null si impossible
+    public static short[] Record(int ms) {
+        WAVEFORMATEX f = new WAVEFORMATEX();
+        f.wFormatTag = 1; f.nChannels = 1; f.nSamplesPerSec = RATE; f.wBitsPerSample = 16; f.nBlockAlign = 2; f.nAvgBytesPerSec = RATE * 2; f.cbSize = 0;
+        IntPtr h;
+        if (waveInOpen(out h, -1, ref f, IntPtr.Zero, IntPtr.Zero, 0) != 0) return null;
+        int bytes = RATE * 2 * ms / 1000;
+        IntPtr data = Marshal.AllocHGlobal(bytes);
+        int hsz = Marshal.SizeOf(typeof(WAVEHDR));
+        IntPtr ph = Marshal.AllocHGlobal(hsz);
+        try {
+            WAVEHDR hd = new WAVEHDR(); hd.lpData = data; hd.dwBufferLength = (uint)bytes;
+            Marshal.StructureToPtr(hd, ph, false);
+            waveInPrepareHeader(h, ph, hsz); waveInAddBuffer(h, ph, hsz); waveInStart(h);
+            DateTime end = DateTime.UtcNow.AddMilliseconds(ms + 1500);
+            while (DateTime.UtcNow < end) {
+                WAVEHDR cur = (WAVEHDR)Marshal.PtrToStructure(ph, typeof(WAVEHDR));
+                if ((cur.dwFlags & 1) != 0) break;   // WHDR_DONE
+                Thread.Sleep(50);
+            }
+            waveInStop(h); waveInReset(h);
+            WAVEHDR done = (WAVEHDR)Marshal.PtrToStructure(ph, typeof(WAVEHDR));
+            int n = (int)done.dwBytesRecorded / 2;
+            short[] s = new short[n];
+            if (n > 0) Marshal.Copy(data, s, 0, n);
+            waveInUnprepareHeader(h, ph, hsz);
+            return s;
+        } finally { waveInClose(h); Marshal.FreeHGlobal(ph); Marshal.FreeHGlobal(data); }
+    }
+    public static double Dbfs(short[] s) {
+        if (s == null || s.Length == 0) return -120;
+        double sum = 0; foreach (short v in s) { double x = v / 32768.0; sum += x * x; }
+        double rms = Math.Sqrt(sum / s.Length);
+        return rms <= 0.000001 ? -120 : 20 * Math.Log10(rms);
+    }
+    // niveau de la fréquence freq dans l'enregistrement (algorithme de Goertzel)
+    public static double ToneLevel(short[] s, double freq) {
+        if (s == null || s.Length == 0) return 0;
+        double w = 2 * Math.PI * freq / RATE, c = 2 * Math.Cos(w), s1 = 0, s2 = 0;
+        foreach (short v in s) { double s0 = v / 32768.0 + c * s1 - s2; s2 = s1; s1 = s0; }
+        double p = s1 * s1 + s2 * s2 - c * s1 * s2;
+        return Math.Sqrt(Math.Max(0, p)) / s.Length;
+    }
+    public static byte[] ToneWav(double freq, int ms) {
+        int rate = 44100, n = rate * ms / 1000;
+        MemoryStream m = new MemoryStream(); BinaryWriter w = new BinaryWriter(m);
+        w.Write(new char[] { 'R', 'I', 'F', 'F' }); w.Write(36 + n * 2); w.Write(new char[] { 'W', 'A', 'V', 'E' });
+        w.Write(new char[] { 'f', 'm', 't', ' ' }); w.Write(16); w.Write((short)1); w.Write((short)1); w.Write(rate); w.Write(rate * 2); w.Write((short)2); w.Write((short)16);
+        w.Write(new char[] { 'd', 'a', 't', 'a' }); w.Write(n * 2);
+        for (int i = 0; i < n; i++) { double env = Math.Min(1.0, Math.Min(i, n - i) / (rate * 0.02)); w.Write((short)(Math.Sin(2 * Math.PI * freq * i / rate) * 16000 * env)); }
+        w.Flush(); return m.ToArray();
+    }
+}
+'@
+$audioOk = $false
+try { if (-not ('AudioTest' -as [type])) { Add-Type -TypeDefinition $audioCode -ErrorAction Stop }; $audioOk = ([AudioTest]::Devices() -gt 0) } catch {}
+function Get-NoiseDb([int]$ms) {
+    if (-not $audioOk) { return $null }
+    try { $s = [AudioTest]::Record($ms); if ($s -and $s.Length -gt 1000) { return [math]::Round([AudioTest]::Dbfs($s), 1) } } catch {}
+    return $null
+}
 
 # ---------------------------------------------------------------- 11
 Step 11 "Test de charge du processeur ($stressMin min, tous les cœurs)"
 $seconds = $stressMin * 60
 $samples = New-Object System.Collections.Generic.List[object]
 $okTot = 0; $badTot = 0
+$noiseIdle = $null; $noiseLoad = $null
 if ($benchOk) {
+    $noiseIdle = Get-NoiseDb 3000          # bruit au repos, juste avant la charge
     [DiagBench]::Start($threads, $seconds)
     $start = Get-Date
     while ([DiagBench]::IsRunning()) {
-        Start-Sleep -Seconds 5
+        if ($null -eq $noiseLoad -and $audioOk -and ((Get-Date) - $start).TotalSeconds -ge [math]::Min(120, $seconds / 2)) { $noiseLoad = Get-NoiseDb 3000; if ($null -eq $noiseLoad) { $noiseLoad = -999 } }
+        else { Start-Sleep -Seconds 5 }
         $load = $null; $freq = $null; $temp = $null
         try { $load = (Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'").PercentProcessorTime } catch {}
         try { $perf = (Get-CimInstance Win32_PerfFormattedData_Counters_ProcessorInformation -Filter "Name='_Total'").PercentProcessorPerformance; $freq = [int]($cpu.MaxClockSpeed * $perf / 100) } catch {}
@@ -979,6 +1118,7 @@ if ($benchOk) {
     $r = [DiagBench]::Finish(); $okTot = $r[0]; $badTot = $r[1]
     Write-Progress -Activity 'Test de charge processeur' -Completed
 }
+if ($noiseLoad -eq -999) { $noiseLoad = $null }
 $avgLoad = [int](($samples | Where-Object { $null -ne $_.Charge } | Measure-Object -Property Charge -Average).Average)
 $firstF = ($samples | Where-Object { $_.T -le 60 -and $_.MHz } | Measure-Object -Property MHz -Average).Average
 $lastF  = ($samples | Where-Object { $_.T -gt ($seconds / 2) -and $_.MHz } | Measure-Object -Property MHz -Average).Average
@@ -1003,9 +1143,9 @@ if ($maxT -and $lhmCpuOk) {
 } elseif ($maxT -and $maxT -gt 95) { Add-Alert ORANGE "Température mesurée $maxT C (capteur ACPI, indicatif)." 5 }
 
 # ---------------------------------------------------------------- 12
-Step 12 'Test de la carte graphique (puissance, stabilité, chauffe) - 2 min'
+Step 12 "Test de la carte graphique (puissance, stabilité, chauffe) - $([math]::Round(($gpuSecMode + 30) / 60)) min"
 Write-Host '   Une fenêtre plein écran va sʼouvrir avec des motifs qui bougent. Ne touchez à rien.' -ForegroundColor DarkGray
-$gpuSec = 90
+$gpuSec = $gpuSecMode
 $gpuHtml = @'
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Test carte graphique</title>
 <style>html,body{margin:0;height:100%;background:#111;color:#eee;font:16px Segoe UI,Arial,sans-serif;overflow:hidden}
@@ -1171,7 +1311,7 @@ if ($gpuRes) {
     if ($gpuMaxHot -and $gpuMaxHot -ge 105) { Add-Alert ROUGE "Point chaud de la carte graphique à $gpuMaxHot C." 10 }
     if ($gpuMaxT -and $gpuMaxT -ge 90) { Add-Alert ROUGE "Carte graphique à $gpuMaxT C : beaucoup trop chaude." 10 }
     elseif ($gpuMaxT -and $gpuMaxT -ge 84) { Add-Alert ORANGE "Carte graphique à $gpuMaxT C : chaude." 4 }
-} else { Write-Host '   Pas de résultat du test de la carte graphique.' -ForegroundColor Yellow; Add-Alert INFO 'Test de la carte graphique non réalisé : faire un test OCCT à la main.' }
+} else { Write-Host '   Pas de résultat du test de la carte graphique.' -ForegroundColor Yellow; Add-Alert INFO 'Test de la carte graphique non réalisé (Edge absent ou bloqué) : faire un test OCCT à la main.' }
 
 # ---------------------------------------------------------------- 13
 Step 13 'Sécurité, logiciels suspects (minage, overclocking), périphériques'
@@ -1234,11 +1374,114 @@ Add-Table 'Autres périphériques' ([ordered]@{
     'Contrôleurs USB' = @(Get-CimInstance Win32_USBController -ErrorAction SilentlyContinue).Count
 })
 
-# ---------------------------------------------------------------- 14
-Step 14 'Clé USB / disque externe : vraie capacité (facultatif)'
-$extRes = $null
 $toolLetter = $root.Substring(0, 1).ToUpper()
 $usbNums = @(Get-Disk -ErrorAction SilentlyContinue | Where-Object { "$($_.BusType)" -eq 'USB' } | ForEach-Object { [int]$_.Number })
+# ---------------------------------------------------------------- 14
+Step 14 'Réseau et Internet (Wi-Fi, Ethernet, latence, débit)'
+$adapters = @(); try { $adapters = @(Get-NetAdapter -Physical -ErrorAction Stop) } catch {}
+$wifiAd = $adapters | Where-Object { $_.NdisPhysicalMedium -eq 9 -or $_.InterfaceDescription -match 'Wi-?Fi|Wireless|802\.11' } | Select-Object -First 1
+$ethAd  = $adapters | Where-Object { $_ -ne $wifiAd -and ($_.NdisPhysicalMedium -eq 14 -or $_.InterfaceDescription -match 'Ethernet|GbE|Gigabit|2\.5G') } | Select-Object -First 1
+$wifiSignal = $null; $wifiRadio = ''; $wifiRx = $null
+if ($wifiAd -and "$($wifiAd.Status)" -eq 'Up') {
+    try {
+        $wl = @(netsh wlan show interfaces 2>$null)
+        $m = $wl | Select-String -Pattern '^\s*Signal\s*:\s*(\d+)\s*%' | Select-Object -First 1; if ($m) { $wifiSignal = [int]$m.Matches[0].Groups[1].Value }
+        $m = $wl | Select-String -Pattern '^\s*(Radio type|Type de radio)\s*:\s*(.+)$' | Select-Object -First 1; if ($m) { $wifiRadio = $m.Matches[0].Groups[2].Value.Trim() }
+        $m = $wl | Select-String -Pattern '^\s*(Receive rate|R.{1,3}ception)[^:]*:\s*([\d\.,]+)' | Select-Object -First 1; if ($m) { $wifiRx = ToD ($m.Matches[0].Groups[2].Value -replace ',', '.') }
+    } catch {}
+}
+$ping = $null; try { $pr = @(Test-Connection -ComputerName 1.1.1.1 -Count 4 -ErrorAction Stop); $ping = [int](($pr | Measure-Object -Property ResponseTime -Average).Average) } catch {}
+$dnsOk = $false; try { $null = [Net.Dns]::GetHostAddresses('www.microsoft.com'); $dnsOk = $true } catch {}
+$dlMbps = $null
+if ($null -ne $ping -or $dnsOk) {
+    Write-Host '   Mesure du débit Internet (12 s max)...' -ForegroundColor DarkGray
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $req = [Net.HttpWebRequest]::Create('https://speed.cloudflare.com/__down?bytes=100000000')
+        $req.Timeout = 15000; $req.ReadWriteTimeout = 15000; $req.UserAgent = 'DiagnosticPC'
+        $resp = $req.GetResponse(); $st = $resp.GetResponseStream()
+        $nbuf = New-Object byte[] 131072; $tot = 0; $sw = [Diagnostics.Stopwatch]::StartNew()
+        while ($sw.Elapsed.TotalSeconds -lt 12) { $n = $st.Read($nbuf, 0, $nbuf.Length); if ($n -le 0) { break }; $tot += $n }
+        $sw.Stop(); $resp.Close()
+        if ($sw.Elapsed.TotalSeconds -gt 0.5) { $dlMbps = [math]::Round($tot * 8 / 1e6 / $sw.Elapsed.TotalSeconds, 1) }
+    } catch {}
+}
+Add-Table 'Réseau et Internet' ([ordered]@{
+    'Carte Wi-Fi'       = $(if ($wifiAd) { "$($wifiAd.InterfaceDescription) - $($wifiAd.Status)$(if ($wifiRadio) { " - norme $wifiRadio" })" } else { 'aucune' })
+    'Signal Wi-Fi'      = $(if ($null -ne $wifiSignal) { "$wifiSignal %$(if ($wifiRx) { ", liaison $wifiRx Mbit/s" })" } elseif ($wifiAd -and "$($wifiAd.Status)" -eq 'Up') { 'non lisible (localisation Windows désactivée ?)' } else { 'non connecté' })
+    'Carte Ethernet'    = $(if ($ethAd) { "$($ethAd.InterfaceDescription) - $($ethAd.Status)$(if ("$($ethAd.Status)" -eq 'Up') { ", $($ethAd.LinkSpeed)" })" } else { 'aucune' })
+    'Latence (ping)'    = $(if ($null -ne $ping) { "$ping ms" } else { 'pas de réponse' })
+    'Débit Internet'    = $(if ($dlMbps) { "$dlMbps Mbit/s en téléchargement" } else { 'non mesuré' })
+})
+Write-Host "   Wi-Fi : $(if ($wifiAd) { "$($wifiAd.Status), signal $wifiSignal %" } else { 'absent' }) | ping : $ping ms | débit : $dlMbps Mbit/s"
+if (-not $wifiAd -and $isLaptop) { Add-Alert ORANGE 'Aucune carte Wi-Fi détectée sur ce portable (désactivée, sans pilote ou en panne).' 5 }
+if ($null -eq $ping -and -not $dnsOk) { Add-Alert ORANGE 'Pas de connexion Internet pendant le test : réseau, Wi-Fi et débit non vérifiés.' }
+elseif ($dlMbps) { Add-Alert OK "Internet fonctionne : $dlMbps Mbit/s, latence $ping ms." }
+if ($null -ne $wifiSignal -and $wifiSignal -lt 40) { Add-Alert ORANGE "Signal Wi-Fi faible ($wifiSignal %) : rapproche-toi de la box ou vérifie lʼantenne Wi-Fi." }
+if ($ethAd -and "$($ethAd.Status)" -eq 'Up' -and "$($ethAd.LinkSpeed)" -match '^100 ?M') { Add-Alert INFO 'Ethernet limité à 100 Mbit/s : câble ou prise à vérifier (1 Gbit/s attendu).' }
+
+# ---------------------------------------------------------------- 15
+Step 15 'Son, micro, caméra et USB (tests automatiques)'
+# Son : le PC joue un son de 1000 Hz et lʼécoute avec son propre micro
+$sndRes = 'non testé'; $sndCls = ''
+if ($audioOk) {
+    Write-Host '   Test du son : un bip va retentir pendant 3 secondes.' -ForegroundColor DarkGray
+    try {
+        $base = [AudioTest]::Record(1500)
+        $wav = [AudioTest]::ToneWav(1000, 3200)
+        $sp = New-Object Media.SoundPlayer (New-Object IO.MemoryStream (, $wav))
+        $sp.Play(); Start-Sleep -Milliseconds 400
+        $rec = [AudioTest]::Record(2000)
+        $sp.Stop(); $sp.Dispose()
+        $micDb = [AudioTest]::Dbfs($base)
+        $t0 = [AudioTest]::ToneLevel($base, 1000); $t1 = [AudioTest]::ToneLevel($rec, 1000)
+        $gain = $(if ($t0 -gt 0) { [math]::Round(20 * [math]::Log10([math]::Max($t1, 1e-12) / $t0), 1) } else { 99 })
+        if ($micDb -le -90) { $sndRes = 'micro muet ou désactivé (son des haut-parleurs non vérifiable)'; $sndCls = 'o'; Add-Alert ORANGE 'Micro muet, désactivé ou absent : vérifier les paramètres de confidentialité du micro.' 3 }
+        elseif ($gain -ge 12) { $sndRes = "haut-parleurs et micro fonctionnent (bip capté à +$gain dB)"; $sndCls = 'g'; Add-Alert OK 'Haut-parleurs et micro : fonctionnent (test automatique).' }
+        else { $sndRes = "bip non capté (+$gain dB) : volume à zéro, casque branché ou haut-parleurs défectueux"; $sndCls = 'o'; Add-Alert ORANGE 'Le micro nʼa pas entendu le bip : volume coupé, casque branché, ou haut-parleurs défectueux.' 5 }
+    } catch { $sndRes = "test impossible : $($_.Exception.Message)" }
+} else { $sndRes = 'aucun micro utilisable : haut-parleurs non testables automatiquement'; Add-Alert INFO 'Pas de micro utilisable : le son nʼa pas pu être testé automatiquement.' }
+# Bruit des ventilateurs (mesuré pendant le test de charge du processeur)
+$noiseTxt = 'non mesuré'
+if ($null -ne $noiseIdle -and $null -ne $noiseLoad) {
+    $noiseDiff = [math]::Round($noiseLoad - $noiseIdle, 1)
+    $noiseTxt = "repos $noiseIdle dB, sous charge $noiseLoad dB ($(if ($noiseDiff -ge 0) { '+' })$noiseDiff dB)"
+    if ($noiseDiff -ge 15) { Add-Alert ORANGE "Ventilateurs très bruyants sous charge (+$noiseDiff dB au micro) : poussière ou ventilateur fatigué." 5 }
+    elseif ($noiseDiff -lt 8) { Add-Alert OK 'Bruit sous charge normal.' }
+}
+# Caméra
+$cams = @(); try { $cams = @(Get-PnpDevice -Class Camera, Image -PresentOnly -ErrorAction Stop) } catch {}
+$camBad = @($cams | Where-Object { "$($_.Status)" -ne 'OK' })
+if ($cams.Count -eq 0 -and $isLaptop) { Add-Alert ORANGE 'Aucune webcam détectée (désactivée dans le BIOS, sans pilote, ou en panne).' 3 }
+elseif ($camBad.Count) { Add-Alert ORANGE "Webcam en erreur : $(($camBad | ForEach-Object { $_.FriendlyName }) -join ', ')." 3 }
+elseif ($cams.Count) { Add-Alert OK "Webcam détectée et fonctionnelle : $(($cams | Select-Object -First 1).FriendlyName)." }
+# USB : contrôleurs, et vitesse réelle du port utilisé par la clé
+$usbCtl = @(Get-CimInstance Win32_USBController -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+$usb3 = @($usbCtl | Where-Object { $_ -match 'USB ?3|xHCI|eXtensible|USB4' }).Count -gt 0
+$keySpeed = $null
+$keyIsUsb = $false; try { $keyIsUsb = ("$((Get-Volume -DriveLetter $toolLetter -ErrorAction Stop).DriveType)" -eq 'Removable') -or ($usbNums -contains $keyDiskNum) } catch {}
+if ($keyIsUsb) {
+    $kf = Join-Path $root 'diag_vitesse_usb.bin'; $kfs = $null
+    try {
+        $kbuf = New-Object byte[] (4MB); (New-Object Random 7).NextBytes($kbuf)
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $kfs = New-Object IO.FileStream($kf, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None, 4MB, [IO.FileOptions]::WriteThrough)
+        for ($w = 0; $w -lt 256MB; $w += $kbuf.Length) { $kfs.Write($kbuf, 0, $kbuf.Length) }
+        $kfs.Flush($true); $kfs.Close(); $sw.Stop()
+        $keySpeed = [int](256 / $sw.Elapsed.TotalSeconds)
+    } catch {} finally { if ($kfs) { $kfs.Dispose() }; Remove-Item $kf -Force -ErrorAction SilentlyContinue }
+}
+Add-Table 'Son, caméra et USB' ([ordered]@{
+    'Haut-parleurs et micro'   = $sndRes
+    'Bruit des ventilateurs'   = $noiseTxt
+    'Webcam'                   = $(if ($cams.Count) { (($cams | ForEach-Object { "$($_.FriendlyName) ($($_.Status))" }) -join ', ') } else { 'aucune' })
+    'Contrôleurs USB'          = "$($usbCtl.Count) contrôleur(s), USB 3 : $(if ($usb3) { 'oui' } else { 'non détecté' })"
+    'Vitesse de la clé USB'    = $(if ($keySpeed) { "$keySpeed Mo/s en écriture$(if ($keySpeed -lt 25) { ' (port USB 2 ou clé lente)' })" } else { 'non mesurée' })
+})
+
+# ---------------------------------------------------------------- 16
+Step 16 'Clé USB / disque externe : vraie capacité (facultatif)'
+$extRes = $null
 $extVols = @()
 foreach ($v in @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -and $_.Size -gt 0 })) {
     $L = "$($v.DriveLetter)".ToUpper()
@@ -1364,8 +1607,8 @@ public static class CapCheck {
     }
 }
 
-# ---------------------------------------------------------------- 15
-Step 15 'Contrôles manuels : test de lʼécran, bruit, ports, état physique'
+# ---------------------------------------------------------------- 17
+Step 17 'Derniers contrôles : écran, ports USB, mémoire, état extérieur'
 $manual = [ordered]@{}
 $scrDefects = @{}; $scrTestDone = $false
 $doScreen = Read-Host 'Lancer le test visuel de lʼécran (8 motifs plein écran, 1 à 2 min) ? (O/N)'
@@ -1442,10 +1685,48 @@ if ($scrTestDone) {
         else { $manual["Écran : $($q[0])"] = 'Non vérifié' }
     }
 }
+# Ports USB : détection automatique de chaque port où lʼon branche un appareil
+$usbPorts = $null
+$doUsb = Read-Host 'Tester les ports USB ? Il faut une souris, un téléphone ou une autre clé (PAS la clé du diagnostic) (O/N)'
+if ($doUsb -match '^[oOyY]') {
+    Write-Host '   Branche lʼappareil sur un port, attends le message vert, débranche-le, puis passe au port suivant.' -ForegroundColor Yellow
+    Write-Host '   Appuie sur Entrée quand tous les ports sont faits.' -ForegroundColor Yellow
+    $usbList = { @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like 'USB\VID*' -and $_.InstanceId -notmatch '&MI_' }) }
+    $known = @{}; foreach ($d in (& $usbList)) { $known[$d.InstanceId] = 1 }
+    $ports = @{}
+    while ($true) {
+        try { if ([Console]::KeyAvailable -and [Console]::ReadKey($true).Key -eq 'Enter') { break } } catch { break }
+        Start-Sleep -Milliseconds 600
+        $now = & $usbList
+        $ids = @{}; foreach ($d in $now) { $ids[$d.InstanceId] = 1 }
+        foreach ($d in $now) {
+            if (-not $known.ContainsKey($d.InstanceId)) {
+                $known[$d.InstanceId] = 1
+                $loc = ''; try { $loc = "" + (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_LocationInfo' -ErrorAction Stop).Data } catch {}
+                $pk = $(if ($loc) { $loc } else { $d.InstanceId })
+                if (-not $ports.ContainsKey($pk)) { $ports[$pk] = $d.FriendlyName; Write-Host "   Port n°$($ports.Count) : OK ($($d.FriendlyName))" -ForegroundColor Green }
+                else { Write-Host '   (port déjà testé)' -ForegroundColor DarkGray }
+            }
+        }
+        foreach ($k in @($known.Keys)) { if (-not $ids.ContainsKey($k)) { $known.Remove($k) } }
+    }
+    $usbPorts = $ports.Count
+    $manual['Ports USB qui fonctionnent (détection automatique)'] = "$usbPorts port(s)"
+    if ($usbPorts -gt 0) { Add-Alert OK "$usbPorts port(s) USB testé(s) : fonctionnent." }
+    Write-Host "   $usbPorts port(s) USB fonctionnel(s). Si un port nʼa rien affiché, il est probablement défectueux." -ForegroundColor Cyan
+}
+# Test complet de la mémoire par Windows au prochain redémarrage
+$mdScheduled = $false
+if ($fullMode -or $ramErrors -gt 0 -or -not $mdRes -or $ramTested -eq 0) {
+    $q = Read-Host 'Programmer le test complet de la RAM de Windows au prochain redémarrage (10 à 20 min, puis relance ce diagnostic pour lire le résultat) ? (O/N)'
+    if ($q -match '^[oOyY]') {
+        & bcdedit /bootsequence '{memdiag}' 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { $mdScheduled = $true; Write-Host '   Programmé : le test se lancera tout seul au prochain redémarrage.' -ForegroundColor Green }
+        else { Write-Host '   Impossible de le programmer (lance « mdsched » depuis le menu Démarrer).' -ForegroundColor Yellow }
+    }
+}
 $questions = [ordered]@{
-    'Aucun bruit anormal (grésillement, ventilateur bruyant)' = 'Bruit anormal signalé pendant les tests.'
-    'Ports USB testés et fonctionnels'                        = 'Port(s) USB défectueux signalé(s).'
-    'État physique correct (pas de choc, poussière normale)'  = 'État physique douteux signalé.'
+    'État extérieur correct (pas de choc ni fissure, charnières solides)' = 'État physique douteux signalé.'
 }
 foreach ($q in $questions.Keys) {
     $a = Read-Host "   $q ? (O/N, Entrée = pas vérifié)"
@@ -1750,7 +2031,7 @@ if (($gpuOnMain -and $null -ne $gpuDrop -and $gpuDrop -ge 20) -or ($gpuMaxT -and
 if ($gpuRes -and ($gpuRes.lost -or $gpuRes.errors -gt 0)) { Add-Upg 1 'Carte graphique' 'Instabilité détectée : réinstaller proprement le pilote (DDU), retirer tout overclocking (MSI Afterburner), vérifier lʼalimentation et les câbles PCIe, puis refaire le test. Si les erreurs persistent : carte défectueuse.' 'Plus de plantages ni dʼartefacts en jeu.' }
 if ($freqDrop -or ($maxT -and $maxT -gt 90)) { Add-Upg 1 'Refroidissement' 'Nettoyer la poussière, vérifier les ventilateurs / le ventirad et refaire la pâte thermique.' 'Le processeur ne sera plus bridé par la chaleur.' }
 if ($badTot -gt 0) { Add-Upg 1 'Processeur' 'Calculs faux sous charge : remettre le BIOS par défaut (désactiver lʼoverclocking), vérifier le refroidissement, puis tester à nouveau.' 'Stabilité (plantages, fichiers corrompus).' }
-if ($ramErrors -gt 0) { Add-Upg 1 'Mémoire vive' 'Erreurs RAM : désactiver XMP pour tester, puis tester chaque barrette seule avec MemTest86 et remplacer la barrette défectueuse.' 'Stabilité.' }
+if ($ramErrors -gt 0) { Add-Upg 1 'Mémoire vive' 'Erreurs RAM : désactiver XMP pour tester, refaire le test complet de Windows (mdsched) barrette par barrette et remplacer la barrette défectueuse.' 'Stabilité.' }
 if ($channels -eq 1 -and $slots -ge 2 -and -not $ramSoldered -and -not ($gPlan -and @($gPlan.Items | Where-Object Key -eq 'RAM').Count)) {
     $m0 = $mods[0]; Add-Upg 2 'Mémoire vive' "Ajouter une barrette identique ($($m0.Manufacturer) $((''+$m0.PartNumber).Trim()), $(GB $m0.Capacity) Go) pour passer en double canal." 'Bande passante mémoire x2 (jeux et montage plus fluides avec une puce graphique intégrée).'
 }
@@ -1924,10 +2205,11 @@ $alertHtml
 $($sections -join "`n")
 $(if ($errLog.Count) { "<h3>Journal technique (pour Claude)</h3><pre>$(Enc ($errLog -join "`n"))</pre>" })
 </details>
-<h2>À compléter à la main</h2><ul>
-$(if (-not ($gpuRes -and $gpuRes.ok)) { '<li>Carte graphique : le test intégré nʼa pas pu se faire ; lancer OCCT (dossier OCCT), test « 3D Adaptive » 10 min, vérifier 0 erreur et GPU &lt; 85 °C.</li>' } else { '<li>Carte graphique : pour un test de stabilité plus long (30 min), OCCT « 3D Adaptive ».</li>' })
-<li>RAM : pour un test complet, MemTest86 sur clé USB (1 à 2 h).</li>
-<li>Ports USB, Wi-Fi / Ethernet, prises audio.</li></ul>
+<h2>Reste à vérifier à lʼœil</h2><ul>
+<li>État extérieur : chocs, fissures, charnières (portable), aérations propres.</li>
+$(if ($null -eq $usbPorts) { '<li>Ports USB : non testés. Relance le diagnostic avec une souris ou un téléphone pour les tester automatiquement.</li>' })
+$(if ($mdScheduled) { '<li>RAM : test complet de Windows programmé au prochain redémarrage ; relance ce diagnostic ensuite pour lire son résultat.</li>' })
+</ul>
 <p class="small">Les indices de performance sont des ordres de grandeur issus de moyennes publiques (jeu 1440p, rendu, encodage) et du benchmark intégré. $(if ($lhmCpuOk) { 'Températures lues par LibreHardwareMonitor sur les capteurs du processeur et de la carte graphique.' } else { 'Sans LibreHardwareMonitor, la température du processeur vient du capteur ACPI (indicatif).' }) La puissance mesurée de la carte graphique (G ops/s) sert de référence pour comparer des PC entre eux.</p>
 </body></html>
 "@
@@ -1950,6 +2232,9 @@ foreach ($ur in $usageRes) {
 }
 $sum += ''; $sum += "TEST CARTE GRAPHIQUE : $(if ($gpuRes) { "$($gpuRes.renderer) | $gpuScore G ops/s | chute $gpuDrop % | erreurs $($gpuRes.errors)/$($gpuRes.checks) | temp. max $gpuMaxT C | utilisation $([int]$gpuUtil) %" } else { 'non réalisé' })"
 $sum += "TEST PROCESSEUR : 1 cœur $mono pts | multi $multi pts | gain x$scaling | temp. max $maxT C | calculs faux $badTot"
+$sum += "RÉSEAU : Wi-Fi $(if ($wifiAd) { "$($wifiAd.Status), signal $wifiSignal %" } else { 'absent' }) | ping $ping ms | débit $dlMbps Mbit/s"
+$sum += "SON : $sndRes | bruit : $noiseTxt | webcam : $($cams.Count) | USB : $(if ($null -ne $usbPorts) { "$usbPorts port(s) OK" } else { 'ports non testés' }), clé $keySpeed Mo/s"
+$sum += "RAM : test direct $ramTested Go / $ramErrors erreur(s) | test Windows : $(if ($mdRes) { if ($mdRes.Bad) { 'ERREURS' } else { 'OK' } } else { 'jamais lancé' })$(if ($mdScheduled) { ' (programmé)' })"
 if ($extRes) { $sum += "DISQUE EXTERNE $($extRes.Letter): : $($extRes.Verdict) (écriture $($extRes.Write) Mo/s, lecture $($extRes.Read) Mo/s)" }
 $sum += ''; $sum += 'POINTS RELEVÉS :'
 foreach ($a in ($alerts | Sort-Object { @{ ROUGE = 0; ORANGE = 1; INFO = 2; OK = 3 }[$_.Level] })) { $sum += " [$($a.Level)] $($a.Text)" }
@@ -1965,8 +2250,3 @@ Write-Host "Résumé texte (à envoyer à Claude) : $txtPath"
 Start-Process $reportPath
 if ($lhm) { try { $lhm.Close() } catch {} }
 
-$occt = Get-ChildItem (Join-Path $root 'OCCT') -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($occt) {
-    $go = Read-Host 'Lancer OCCT pour tester la carte graphique ? (O/N)'
-    if ($go -match '^[oOyY]') { Start-Process $occt.FullName }
-}
