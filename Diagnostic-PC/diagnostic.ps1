@@ -15,7 +15,7 @@
 # =====================================================================
 $ErrorActionPreference = 'Continue'
 $Error.Clear()
-$VERSION = '2.7'
+$VERSION = '2.8'
 try { $Host.UI.RawUI.WindowTitle = 'Diagnostic PC' } catch {}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportDir = Join-Path $root 'Rapports'
@@ -1805,7 +1805,36 @@ if ($fullMode -or $ramErrors -gt 0 -or -not $mdRes -or $ramTested -eq 0) {
     $q = Read-Host 'Programmer le test complet de la RAM de Windows au prochain redémarrage (10 à 20 min, puis relance ce diagnostic pour lire le résultat) ? (O/N)'
     if ($q -match '^[oOyY]') {
         & bcdedit /bootsequence '{memdiag}' 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { $mdScheduled = $true; Write-Host '   Programmé : le test se lancera tout seul au prochain redémarrage.' -ForegroundColor Green }
+        if ($LASTEXITCODE -eq 0) {
+            $mdScheduled = $true
+            # Petit script qui affichera le résultat tout seul après le redémarrage (même sans la clé)
+            try {
+                $resDir = Join-Path $env:LOCALAPPDATA 'DiagnosticPC'
+                New-Item -ItemType Directory -Force -Path $resDir | Out-Null
+                $resPs1 = Join-Path $resDir 'resultat-memoire.ps1'
+                $resCode = @'
+Add-Type -AssemblyName System.Windows.Forms
+$ev = $null
+for ($i = 0; $i -lt 30 -and -not $ev; $i++) {
+    try { $ev = Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-MemoryDiagnostics-Results'; StartTime = (Get-Date).AddHours(-3) } -MaxEvents 1 -ErrorAction Stop } catch { Start-Sleep -Seconds 10 }
+}
+if ($ev) {
+    $bad = @(1102, 1202) -contains $ev.Id
+    $txt = $(if ($bad) { "ERREURS DÉTECTÉES dans la mémoire vive (RAM).`n`nUne barrette est probablement défectueuse : relance le Diagnostic PC pour les conseils." } else { "Aucune erreur dans la mémoire vive (RAM).`n`nLa RAM de ce PC est saine." })
+    $icon = $(if ($bad) { 'Error' } else { 'Information' })
+    [void][System.Windows.Forms.MessageBox]::Show("Test complet de la mémoire Windows du $($ev.TimeCreated.ToString('dd/MM/yyyy HH:mm')) :`n`n$txt", 'Diagnostic PC', 'OK', $icon)
+} else {
+    [void][System.Windows.Forms.MessageBox]::Show("Le résultat du test de la mémoire nʼest pas encore disponible.`nRelance le Diagnostic PC : il le lira dans le rapport.", 'Diagnostic PC', 'OK', 'Information')
+}
+Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
+'@
+                $resCode | Out-File -FilePath $resPs1 -Encoding UTF8
+                $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$resPs1`""
+                if (-not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce')) { New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' | Out-Null }
+                Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -Name 'DiagnosticPC-Memoire' -Value $cmd
+            } catch {}
+            Write-Host '   Programmé : le test se lancera tout seul au prochain redémarrage, et son résultat sʼaffichera ensuite automatiquement.' -ForegroundColor Green
+        }
         else { Write-Host '   Impossible de le programmer (lance « mdsched » depuis le menu Démarrer).' -ForegroundColor Yellow }
     }
 }
@@ -2305,7 +2334,7 @@ $(if ($errLog.Count) { "<h3>Journal technique (pour Claude)</h3><pre>$(Enc ($err
 <h2>Reste à vérifier à lʼœil</h2><ul>
 <li>État extérieur : chocs, fissures, charnières (portable), aérations propres.</li>
 $(if ($null -eq $usbPorts) { '<li>Ports USB : non testés. Relance le diagnostic avec une souris ou un téléphone pour les tester automatiquement.</li>' })
-$(if ($mdScheduled) { '<li>RAM : test complet de Windows programmé au prochain redémarrage ; relance ce diagnostic ensuite pour lire son résultat.</li>' })
+$(if ($mdScheduled) { '<li>RAM : test complet de Windows programmé au prochain redémarrage ; son résultat sʼaffichera automatiquement à lʼouverture de la session.</li>' })
 </ul>
 <p class="small">Les indices de performance sont des ordres de grandeur issus de moyennes publiques (jeu 1440p, rendu, encodage) et du benchmark intégré. $(if ($lhmCpuOk) { 'Températures lues par LibreHardwareMonitor sur les capteurs du processeur et de la carte graphique.' } elseif ($lhmState -eq 'nocpu') { 'LibreHardwareMonitor est chargé mais ne lit pas la température du processeur : sur Windows récent, il lui faut le pilote PawnIO (pawnio.eu). La température vient alors du capteur ACPI (indicatif).' } else { 'LibreHardwareMonitor nʼa pas pu être téléchargé (pas dʼInternet) : température du processeur approximative.' }) La puissance mesurée de la carte graphique (G ops/s) sert de référence pour comparer des PC entre eux.</p>
 </body></html>

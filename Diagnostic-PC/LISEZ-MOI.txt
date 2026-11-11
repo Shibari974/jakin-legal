@@ -1,4 +1,4 @@
-﻿DIAGNOSTIC PC COMPLET (v2.7) - MODE D'EMPLOI
+﻿DIAGNOSTIC PC COMPLET (v2.8) - MODE D'EMPLOI
 ============================================
 
 Un seul outil, entièrement automatique, qui remplace plusieurs petits logiciels
@@ -44,7 +44,7 @@ PC de bureau et portables, Windows 10 / 11.
    16    (facultatif) Vraie capacité d'une clé USB / d'un disque externe (contrefaçons)
    17    Écran (8 motifs plein écran), ports USB (détection automatique de chaque port),
          proposition de programmer le test complet de la RAM de Windows au prochain
-         redémarrage (relancer ensuite le diagnostic pour lire le résultat)
+         redémarrage (son résultat s'affiche tout seul à l'ouverture de session)
 
    Seul l'état extérieur (chocs, fissures, charnières) reste à vérifier à l'œil.
 
