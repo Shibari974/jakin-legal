@@ -41,7 +41,9 @@ Fonctionne sur PC de bureau et PC portable, sous Windows 10 / 11.
          contrefaçons (ex. "disque 128 To" à 25 euros qui ne fait en réalité que 64 Go).
          Branche le disque à vérifier EN PLUS de la clé du diagnostic.
          Mode rapide (jusqu'à 100 Go) ou complet. Sauvegarde ses fichiers avant.
-   15    Contrôles manuels : écran plein écran (pixels morts), bruit, ports USB, état physique
+   15    ÉCRAN : test visuel guidé (8 motifs : pixels morts, fuites de lumière, uniformité,
+         dégradé, scintillement) + âge, taille, résolution, compteur d'heures (écrans externes
+         compatibles) => note de l'écran /100. Puis bruit, ports USB, état physique.
 
 4) LES 9 USAGES ÉVALUÉS (note sur 100 chacun)
    1. Bureautique, internet, vidéos         6. Montage vidéo 1080p

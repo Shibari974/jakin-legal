@@ -15,7 +15,7 @@
 # =====================================================================
 $ErrorActionPreference = 'Continue'
 $Error.Clear()
-$VERSION = '2.3'
+$VERSION = '2.4'
 try { $Host.UI.RawUI.WindowTitle = 'Diagnostic PC' } catch {}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportDir = Join-Path $root 'Rapports'
@@ -526,18 +526,99 @@ Add-Grid 'Carte(s) graphique(s)' $gpuRows
 if (-not $mainGpu -or $mainGpu.G -eq 0) { Add-Alert ROUGE 'Aucun pilote graphique correct installé (carte en mode "affichage de base").' 10 }
 elseif (-not $mainGpu.Known) { Add-Alert INFO "Carte graphique « $($mainGpu.Name) » absente de la base : performance estimée." }
 else { Add-Alert OK "Carte graphique principale : $($mainGpu.Name) (indice $($mainGpu.G)/100)." }
-$monRows = @()
+# --- Écran(s) : identité, âge, taille, résolution d'origine, compteur d'heures (DDC/CI)
+$screens = @()
+$basicP = @{}; try { foreach ($b in Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction Stop) { $basicP[$b.InstanceName] = $b } } catch {}
+$connP = @{}; try { foreach ($b in Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorConnectionParams -ErrorAction Stop) { $connP[$b.InstanceName] = [int64]$b.VideoOutputTechnology } } catch {}
+$brightness = $null; try { $brightness = (Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBrightness -ErrorAction Stop | Select-Object -First 1).CurrentBrightness } catch {}
+$dec = { param($a) if ($a) { -join ([char[]]($a | Where-Object { $_ -ne 0 })) } else { '' } }
 try {
-    $monRows = foreach ($mo in Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction Stop) {
-        $dec = { param($a) if ($a) { -join ([char[]]($a | Where-Object { $_ -ne 0 })) } else { '' } }
-        [pscustomobject]@{
-            'Écran'       = & $dec $mo.UserFriendlyName
-            'Fabricant'   = & $dec $mo.ManufacturerName
-            'Fabriqué en' = "semaine $($mo.WeekOfManufacture) de $($mo.YearOfManufacture)"
+    foreach ($mo in Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction Stop) {
+        $inst = "" + $mo.InstanceName
+        $edid = $null
+        try { $edid = (Get-ItemProperty ('HKLM:\SYSTEM\CurrentControlSet\Enum\' + ($inst -replace '_\d+$', '') + '\Device Parameters') -ErrorAction Stop).EDID } catch {}
+        $native = ''
+        if ($edid -and $edid.Length -ge 72 -and ($edid[54] -ne 0 -or $edid[55] -ne 0)) {
+            $hA = [int]$edid[56] + (([int]$edid[58] -band 0xF0) * 16)
+            $vA = [int]$edid[59] + (([int]$edid[61] -band 0xF0) * 16)
+            $native = "$hA x $vA"
         }
+        $bp = $basicP[$inst]; $diag = $null
+        if ($bp -and $bp.MaxHorizontalImageSize -gt 0 -and $bp.MaxVerticalImageSize -gt 0) {
+            $diag = [math]::Round([math]::Sqrt([math]::Pow([double]$bp.MaxHorizontalImageSize, 2) + [math]::Pow([double]$bp.MaxVerticalImageSize, 2)) / 2.54, 1)
+        }
+        $vot = $connP[$inst]
+        $internal = ($vot -eq 11 -or $vot -eq 13 -or $vot -eq 2147483648)
+        $year = [int]$mo.YearOfManufacture
+        $age = $null; if ($year -gt 1990) { $age = [math]::Round(((Get-Date).Year + (Get-Date).DayOfYear / 365.0) - ($year + [math]::Min(52, [int]$mo.WeekOfManufacture) / 52.0), 1) }
+        $nm = & $dec $mo.UserFriendlyName
+        if (-not $nm) { $nm = $(if ($internal) { 'Écran intégré' } else { 'Écran' }) }
+        $screens += [pscustomobject]@{ Name = $nm; Maker = (& $dec $mo.ManufacturerName); Year = $year; Week = [int]$mo.WeekOfManufacture; Age = $age; Diag = $diag; Native = $native; Internal = $internal; Hours = $null }
     }
 } catch {}
+# Compteur d'heures d'utilisation (code DDC/CI 0xC0), donné par certains écrans externes
+$ddcCode = @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class DdcCi {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct PHYSICAL_MONITOR { public IntPtr hPhysicalMonitor; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string szPhysicalMonitorDescription; }
+    delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, IntPtr rect, IntPtr data);
+    [DllImport("user32.dll")] static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc proc, IntPtr data);
+    [DllImport("dxva2.dll", SetLastError = true)] static extern bool GetNumberOfPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, out uint count);
+    [DllImport("dxva2.dll", SetLastError = true)] static extern bool GetPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, uint size, [Out] PHYSICAL_MONITOR[] arr);
+    [DllImport("dxva2.dll", SetLastError = true)] static extern bool GetVCPFeatureAndVCPFeatureReply(IntPtr hMon, byte code, IntPtr type, out uint current, out uint max);
+    [DllImport("dxva2.dll", SetLastError = true)] static extern bool DestroyPhysicalMonitors(uint size, PHYSICAL_MONITOR[] arr);
+    public static long[] UsageHours() {
+        List<long> res = new List<long>();
+        List<IntPtr> mons = new List<IntPtr>();
+        MonitorEnumProc cb = delegate(IntPtr h, IntPtr dc, IntPtr r, IntPtr d) { mons.Add(h); return true; };
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, cb, IntPtr.Zero);
+        foreach (IntPtr h in mons) {
+            uint n;
+            if (!GetNumberOfPhysicalMonitorsFromHMONITOR(h, out n) || n == 0) continue;
+            PHYSICAL_MONITOR[] arr = new PHYSICAL_MONITOR[n];
+            if (!GetPhysicalMonitorsFromHMONITOR(h, n, arr)) continue;
+            foreach (PHYSICAL_MONITOR pm in arr) {
+                uint cur, max; long hours = -1;
+                if (GetVCPFeatureAndVCPFeatureReply(pm.hPhysicalMonitor, 0xC0, IntPtr.Zero, out cur, out max) && cur > 0) hours = cur;
+                res.Add(hours);
+            }
+            DestroyPhysicalMonitors(n, arr);
+        }
+        return res.ToArray();
+    }
+}
+'@
+$ddcHours = @()
+try {
+    if (-not ('DdcCi' -as [type])) { Add-Type -TypeDefinition $ddcCode -ErrorAction Stop }
+    $ddcHours = @([DdcCi]::UsageHours() | Where-Object { $_ -gt 0 })
+} catch {}
+$ext = @($screens | Where-Object { -not $_.Internal })
+if ($ddcHours.Count -ge 1 -and $ext.Count -eq 1) { $ext[0].Hours = [long]$ddcHours[0] }
+# résolution actuelle (carte graphique principale)
+$curRes = ''
+$vcMain = Get-CimInstance Win32_VideoController | Where-Object { $_.CurrentHorizontalResolution -gt 0 } | Select-Object -First 1
+if ($vcMain) { $curRes = "$($vcMain.CurrentHorizontalResolution) x $($vcMain.CurrentVerticalResolution)" }
+$mainScreen = $screens | Where-Object { $_.Internal } | Select-Object -First 1
+if (-not $mainScreen) { $mainScreen = $screens | Select-Object -First 1 }
+$notNative = ($screens.Count -eq 1 -and $mainScreen -and $mainScreen.Native -and $curRes -and $mainScreen.Native -ne $curRes)
+$monRows = foreach ($sc in $screens) {
+    [pscustomobject]@{
+        'Écran'              = "$($sc.Name)$(if ($sc.Internal) { ' (intégré)' })"
+        'Fabricant'          = $sc.Maker
+        'Fabriqué'           = $(if ($sc.Year -gt 1990) { "semaine $($sc.Week) de $($sc.Year)" } else { '?' })
+        'Âge'                = $(if ($null -ne $sc.Age) { "$($sc.Age) ans" } else { '?' })
+        'Taille'             = $(if ($sc.Diag) { "$($sc.Diag) pouces" } else { '?' })
+        'Résolution dʼorigine' = $(if ($sc.Native) { $sc.Native } else { '?' })
+        'Heures dʼutilisation' = $(if ($sc.Hours) { "$($sc.Hours) h (compteur de lʼécran)" } elseif ($sc.Internal) { 'non disponible (écran intégré)' } else { 'non fourni par cet écran' })
+    }
+}
 Add-Grid 'Écran(s)' $monRows
+if ($curRes) { $sections.Add("<p>Résolution utilisée : <b>$curRes</b>$(if ($vcMain.CurrentRefreshRate) { " à $($vcMain.CurrentRefreshRate) Hz" })$(if ($null -ne $brightness) { " - luminosité réglée à $brightness %" })</p>") }
+if ($notNative) { Add-Alert ORANGE "Lʼécran nʼest pas réglé sur sa résolution dʼorigine ($curRes au lieu de $($mainScreen.Native)) : image floue. À corriger dans Paramètres > Affichage." }
 
 # ---------------------------------------------------------------- 5
 Step 5 'Santé des disques'
@@ -1284,27 +1365,84 @@ public static class CapCheck {
 }
 
 # ---------------------------------------------------------------- 15
-Step 15 'Contrôles manuels (écran, bruit, ports, état physique)'
+Step 15 'Contrôles manuels : test de lʼécran, bruit, ports, état physique'
 $manual = [ordered]@{}
-$doScreen = Read-Host 'Lancer le test de lʼécran en plein écran (pixels morts, taches) ? (O/N)'
+$scrDefects = @{}; $scrTestDone = $false
+$doScreen = Read-Host 'Lancer le test visuel de lʼécran (8 motifs plein écran, 1 à 2 min) ? (O/N)'
 if ($doScreen -match '^[oOyY]') {
-    Write-Host '   Plein écran : cliquez ou appuyez sur une touche pour changer de couleur, Échap pour quitter.' -ForegroundColor Yellow
-    Write-Host '   Regardez bien tout lʼécran à chaque couleur (points noirs, blancs ou colorés, taches, zones plus claires).' -ForegroundColor Yellow
+    Write-Host '   Plein écran : une consigne sʼaffiche en bas quelques secondes à chaque motif.' -ForegroundColor Yellow
+    Write-Host '   Clic ou touche = motif suivant, Échap = quitter. Regarde tout lʼécran, de près puis de loin.' -ForegroundColor Yellow
     Start-Sleep -Seconds 3
     try {
         Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-        $colors = @([Drawing.Color]::Black, [Drawing.Color]::White, [Drawing.Color]::Red, [Drawing.Color]::Lime, [Drawing.Color]::Blue, [Drawing.Color]::Gray)
-        $script:ci = 0
+        $C = [Drawing.Color]
+        $patterns = @(
+            [pscustomobject]@{ K = 'solid'; Col = $C::Black; Txt = 'Fond NOIR : points clairs ou colorés ? taches claires sur les bords (fuite de lumière) ?' }
+            [pscustomobject]@{ K = 'solid'; Col = $C::White; Txt = 'Fond BLANC : points noirs ou colorés ? taches, zones jaunies ou plus sombres ?' }
+            [pscustomobject]@{ K = 'solid'; Col = $C::Red;   Txt = 'Fond ROUGE : points noirs ou dʼune autre couleur ?' }
+            [pscustomobject]@{ K = 'solid'; Col = $C::Lime;  Txt = 'Fond VERT : points noirs ou dʼune autre couleur ?' }
+            [pscustomobject]@{ K = 'solid'; Col = $C::Blue;  Txt = 'Fond BLEU : points noirs ou dʼune autre couleur ?' }
+            [pscustomobject]@{ K = 'solid'; Col = [Drawing.Color]::FromArgb(128, 128, 128); Txt = 'Fond GRIS : zones plus sombres, nuages, bandes verticales ou horizontales ?' }
+            [pscustomobject]@{ K = 'grad';  Col = $C::Black; Txt = 'DÉGRADÉ : il doit être régulier, sans grosses marches ni teintes colorées.' }
+            [pscustomobject]@{ K = 'check'; Col = $C::Black; Txt = 'DAMIER FIN : lʼimage ne doit ni scintiller, ni onduler, ni montrer de lignes.' }
+        )
+        $script:ci = 0; $script:hint = $true
         $f = New-Object Windows.Forms.Form
-        $f.FormBorderStyle = 'None'; $f.WindowState = 'Maximized'; $f.TopMost = $true; $f.BackColor = $colors[0]; $f.KeyPreview = $true
-        $next = { $script:ci++; if ($script:ci -ge $colors.Count) { $f.Close() } else { $f.BackColor = $colors[$script:ci] } }
+        $f.FormBorderStyle = 'None'; $f.WindowState = 'Maximized'; $f.TopMost = $true; $f.BackColor = $C::Black; $f.KeyPreview = $true
+        $font = New-Object Drawing.Font('Segoe UI', 16)
+        $timer = New-Object Windows.Forms.Timer; $timer.Interval = 3500
+        $timer.Add_Tick({ $script:hint = $false; $timer.Stop(); $f.Invalidate() })
+        $f.Add_Paint({
+            param($s, $e)
+            $g = $e.Graphics; $w = $f.ClientSize.Width; $h = $f.ClientSize.Height
+            if ($w -lt 2 -or $h -lt 2) { return }
+            $p = $patterns[$script:ci]
+            if ($p.K -eq 'solid') { $g.Clear($p.Col) }
+            elseif ($p.K -eq 'grad') {
+                $br = New-Object Drawing.Drawing2D.LinearGradientBrush((New-Object Drawing.Rectangle(0, 0, $w, $h)), $C::Black, $C::White, [single]0)
+                $g.FillRectangle($br, 0, 0, $w, $h); $br.Dispose()
+            } else {
+                $br = New-Object Drawing.Drawing2D.HatchBrush([Drawing.Drawing2D.HatchStyle]::Percent50, $C::White, $C::Black)
+                $g.FillRectangle($br, 0, 0, $w, $h); $br.Dispose()
+            }
+            if ($script:hint) {
+                $msg = "$($p.Txt)   ($($script:ci + 1)/$($patterns.Count) - clic = suivant, Échap = quitter)"
+                $sz = $g.MeasureString($msg, $font)
+                $x = [math]::Max(10, ($w - $sz.Width) / 2); $y = $h - $sz.Height - 40
+                $g.FillRectangle((New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(200, 0, 0, 0))), $x - 12, $y - 8, $sz.Width + 24, $sz.Height + 16)
+                $g.DrawString($msg, $font, [Drawing.Brushes]::White, $x, $y)
+            }
+        })
+        $next = {
+            $script:ci++
+            if ($script:ci -ge $patterns.Count) { $f.Close() } else { $script:hint = $true; $timer.Stop(); $timer.Start(); $f.Invalidate() }
+        }
         $f.Add_KeyDown({ if ($_.KeyCode -eq 'Escape') { $f.Close() } else { & $next } })
         $f.Add_MouseClick({ & $next })
+        $f.Add_Shown({ $timer.Start() })
         [Windows.Forms.Cursor]::Hide(); [void]$f.ShowDialog(); [Windows.Forms.Cursor]::Show()
-    } catch { Write-Host '   Test écran impossible.' -ForegroundColor Yellow }
+        $timer.Dispose(); $font.Dispose()
+        $scrTestDone = ($script:ci -ge 2)
+    } catch { Write-Host "   Test écran impossible : $($_.Exception.Message)" -ForegroundColor Yellow }
+}
+$scrQ = [ordered]@{
+    'dead'    = @('Pixels morts ou bloqués (points noirs, blancs ou colorés)', 30, 'ORANGE', 'Écran : pixels morts ou bloqués signalés.')
+    'bleed'   = @('Taches claires ou fuites de lumière sur le fond noir', 15, 'ORANGE', 'Écran : fuites de lumière / taches sur fond noir.')
+    'uniform' = @('Zones plus sombres, jaunies ou nuageuses (blanc, gris)', 15, 'ORANGE', 'Écran : luminosité inégale (zones sombres ou jaunies).')
+    'banding' = @('Grosses bandes ou teintes colorées dans le dégradé', 10, 'INFO', 'Écran : dégradé irrégulier (bandes visibles).')
+    'flicker' = @('Scintillement, lignes ou image qui ondule', 30, 'ROUGE', 'Écran : scintillement ou lignes (nappe ou dalle défectueuse).')
+}
+if ($scrTestDone) {
+    Write-Host '   Quʼas-tu vu pendant le test ? (O = oui, jʼai vu ce défaut / N = non)' -ForegroundColor Cyan
+    foreach ($k in $scrQ.Keys) {
+        $q = $scrQ[$k]
+        $a = Read-Host "   $($q[0]) ? (O/N)"
+        if ($a -match '^[oOyY]') { $scrDefects[$k] = $true; $manual["Écran : $($q[0])"] = 'OUI (défaut)'; Add-Alert $q[2] $q[3] $(if ($q[2] -eq 'INFO') { 0 } else { 3 }) }
+        elseif ($a -match '^[nN]') { $manual["Écran : $($q[0])"] = 'non' }
+        else { $manual["Écran : $($q[0])"] = 'Non vérifié' }
+    }
 }
 $questions = [ordered]@{
-    'Écran sans pixel mort ni tache'                          = 'Écran : pixels morts ou taches signalés.'
     'Aucun bruit anormal (grésillement, ventilateur bruyant)' = 'Bruit anormal signalé pendant les tests.'
     'Ports USB testés et fonctionnels'                        = 'Port(s) USB défectueux signalé(s).'
     'État physique correct (pas de choc, poussière normale)'  = 'État physique douteux signalé.'
@@ -1316,6 +1454,26 @@ foreach ($q in $questions.Keys) {
     else { $manual[$q] = 'Non vérifié' }
 }
 Add-Table 'Contrôles manuels' $manual
+
+# Note de l'écran /100 (âge, compteur d'heures, réglage, défauts vus pendant le test)
+$scrScore = 100
+$scrWhy = @()
+if ($mainScreen -and $null -ne $mainScreen.Age) {
+    if ($mainScreen.Age -ge 10) { $scrScore -= 20; $scrWhy += "écran de $($mainScreen.Age) ans (rétroéclairage qui faiblit)" }
+    elseif ($mainScreen.Age -ge 7) { $scrScore -= 10; $scrWhy += "écran de $($mainScreen.Age) ans" }
+}
+$hrs = ($screens | Where-Object { $_.Hours } | Measure-Object -Property Hours -Maximum).Maximum
+if ($hrs -ge 40000) { $scrScore -= 25; $scrWhy += "$hrs h dʼutilisation (fin de vie du rétroéclairage proche)" }
+elseif ($hrs -ge 25000) { $scrScore -= 10; $scrWhy += "$hrs h dʼutilisation" }
+foreach ($k in $scrDefects.Keys) { $scrScore -= [int]$scrQ[$k][1]; $scrWhy += $scrQ[$k][0].ToLower() }
+if ($notNative) { $scrScore -= 5; $scrWhy += 'pas réglé sur sa résolution dʼorigine' }
+$scrScore = [int](Clamp $scrScore)
+if ($screens.Count -eq 0) { $scrScore = $null }
+if ($null -ne $scrScore) {
+    if ($scrScore -ge 85 -and $scrTestDone) { Add-Alert OK "Écran en bon état ($scrScore/100)." }
+    if ($mainScreen -and $mainScreen.Age -ge 7) { Add-Alert INFO "Écran fabriqué en $($mainScreen.Year) ($($mainScreen.Age) ans) : sa luminosité a pu baisser avec le temps." }
+}
+
 
 # =====================================================================
 #  CALCUL DES NOTES
@@ -1662,6 +1820,14 @@ if ($gpuRes -and $gpuRes.ok) { $gpuDetail += "stable ($($gpuRes.errors) erreur),
 if ($gpuMaxT) { $gpuDetail += "$gpuMaxT C max, " }
 if ($mainGpu -and $mainGpu.Av1) { $gpuDetail += 'encodage AV1 matériel : oui' } else { $gpuDetail += 'encodage AV1 matériel : non' }
 $compRows += ,@('Carte graphique', $gpuModel, [int][math]::Round($G), $gpuDetail, '100 = RTX 5090 ; 40 = bonne carte 1440p ; 20 = carte 1080p')
+if ($null -ne $scrScore) {
+    $scrModel = "$($mainScreen.Name)$(if ($mainScreen.Diag) { ", $($mainScreen.Diag) pouces" })$(if ($mainScreen.Native) { ", $($mainScreen.Native)" })"
+    $scrDetail = "Fabriqué en $(if ($mainScreen.Year -gt 1990) { $mainScreen.Year } else { '?' })"
+    if ($hrs) { $scrDetail += ", $hrs h dʼutilisation" }
+    if (-not $scrTestDone) { $scrDetail += ' - test visuel non fait' }
+    if ($scrWhy.Count) { $scrDetail += ' - ' + ($scrWhy -join ', ') } elseif ($scrTestDone) { $scrDetail += ' - aucun défaut vu au test visuel' }
+    $compRows += ,@('Écran', $scrModel, $scrScore, $scrDetail, '100 = écran récent sans défaut ; heures et âge pris en compte')
+}
 $compRows += ,@('Mémoire vive', "$ramTotal Go $ramType, $channels canal(aux)$(if ($ramSoldered) { ', soudée' })", [int]$Ridx, $(if ($memBw) { "Bande passante mesurée : $memBw Go/s" } else { '' }), '100 = 64 Go double canal ; 85 = 32 Go ; 55 = 16 Go')
 $compRows += ,@('Stockage', "$(if ($sysDisk) { $sysDisk.FriendlyName } else { 'Disque C:' }) - $sysKind", [int]$D, "Écriture $writeMBs Mo/s$(if ($seqRead) { ", lecture $([int]$seqRead) Mo/s" }), $freeC Go libres$(if ($null -ne $sysWear) { ", usure $sysWear %" })", '100 = SSD NVMe rapide (> 2 500 Mo/s) avec de la place')
 $h = "<table><tr><th>Composant</th><th>Modèle</th><th style='min-width:150px'>Note</th><th>Détail</th><th>Référence</th></tr>"
