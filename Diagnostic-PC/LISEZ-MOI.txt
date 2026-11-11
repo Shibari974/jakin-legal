@@ -1,4 +1,4 @@
-﻿DIAGNOSTIC PC COMPLET (v2.5) - MODE D'EMPLOI
+﻿DIAGNOSTIC PC COMPLET (v2.6) - MODE D'EMPLOI
 ============================================
 
 Un seul outil, entièrement automatique, qui remplace plusieurs petits logiciels
@@ -32,7 +32,8 @@ PC de bureau et portables, Windows 10 / 11.
    7-9   Benchmarks Windows, processeur (1 cœur / tous les cœurs), vitesse du disque
    10    RAM : 3 motifs (rapide) ou 6 motifs (complet) sur toute la mémoire libre,
          + lecture du résultat du test complet de Windows s'il a déjà été lancé
-   11    Charge du processeur 5 ou 15 min : calculs vérifiés, fréquence, température,
+   11    Refroidissement détecté (watercooling avec ou sans écran, ventirad, portable) puis
+         charge du processeur 5 ou 15 min : calculs vérifiés, fréquence, température, pompe,
          BRUIT des ventilateurs mesuré au micro (repos / charge)
    12    Carte graphique 1 min 30 ou 10 min : puissance, erreurs de calcul, chauffe
    13    Sécurité : BitLocker, antivirus, traces de minage, overclocking, périphériques
@@ -59,6 +60,7 @@ PC de bureau et portables, Windows 10 / 11.
    - PUISSANCE GLOBALE /100 et SANTÉ /100
    - VERDICT pour tes usages, note par composant (dont l'écran)
    - Ce qui limite chaque usage, la pièce à changer et la note estimée après
+   - SCORES DE RÉFÉRENCE estimés (Cinebench, Geekbench, PassMark, 3DMark Time Spy)
    - AMÉLIORATIONS CONSEILLÉES et, si besoin, "Faut-il changer de PC ?"
    - Envoie le fichier .txt à Claude pour une analyse détaillée.
 

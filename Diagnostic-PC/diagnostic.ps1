@@ -15,7 +15,7 @@
 # =====================================================================
 $ErrorActionPreference = 'Continue'
 $Error.Clear()
-$VERSION = '2.5'
+$VERSION = '2.6'
 try { $Host.UI.RawUI.WindowTitle = 'Diagnostic PC' } catch {}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportDir = Join-Path $root 'Rapports'
@@ -216,7 +216,7 @@ function Init-Lhm {
         Get-ChildItem $dll.DirectoryName -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
         Add-Type -Path $dll.FullName -ErrorAction Stop
         $cp = New-Object LibreHardwareMonitor.Hardware.Computer
-        foreach ($p in 'IsCpuEnabled', 'IsGpuEnabled', 'IsMotherboardEnabled') { try { $cp.$p = $true } catch {} }
+        foreach ($p in 'IsCpuEnabled', 'IsGpuEnabled', 'IsMotherboardEnabled', 'IsControllerEnabled') { try { $cp.$p = $true } catch {} }
         $cp.Open()
         $script:lhm = $cp
         $t0 = Read-Lhm
@@ -1092,6 +1092,48 @@ function Get-NoiseDb([int]$ms) {
     return $null
 }
 
+# ---------------------------------------------------------------- refroidissement
+# Type de refroidissement : watercooling (AIO, avec ou sans écran), ventirad, portable.
+function Read-Cooling {
+    $o = [pscustomobject]@{ Pump = $null; Liquid = $null; Fans = @(); Coolers = @() }
+    if (-not $script:lhm) { return $o }
+    try {
+        foreach ($hw in $script:lhm.Hardware) {
+            $ht = "$($hw.HardwareType)"
+            if ($ht -notmatch 'Cooler|Motherboard|EmbeddedController') { continue }
+            $hw.Update(); foreach ($sub in $hw.SubHardware) { $sub.Update() }
+            if ($ht -eq 'Cooler') { $o.Coolers += "$($hw.Name)" }
+            foreach ($h in @($hw) + @($hw.SubHardware)) {
+                foreach ($s in $h.Sensors) {
+                    if ($null -eq $s.Value) { continue }
+                    $st = "$($s.SensorType)"; $nm = "$($s.Name)"; $v = [double]$s.Value
+                    if ($st -eq 'Fan' -and $nm -match 'Pump|Pompe') { if ($null -eq $o.Pump -or $v -gt $o.Pump) { $o.Pump = $v } }
+                    elseif ($st -eq 'Fan') { $o.Fans += $v }
+                    elseif ($st -eq 'Temperature' -and $nm -match 'Liquid|Coolant|Water|Liquide') { if ($v -gt 0 -and $v -lt 90) { $o.Liquid = $v } }
+                }
+            }
+        }
+    } catch {}
+    $o
+}
+$coolKw = 'Kraken|iCUE|Capellix|Hydro|Commander|H1[0-9]{2}i|Ryujin|Ryuo|Galahad|Lian ?Li|LT ?7[0-9]0|Floe|Toughliquid|Thermaltake|DeepCool|LS7[0-9]0|LT5[0-9]0|Coreliquid|Liquid Freezer|MasterLiquid|PL360|Aqua ?Computer|D5 ?NEXT|Quadro|Octo|AIO|Watercool'
+$coolSoft = 'NZXT CAM|iCUE|L-Connect|TT RGB|Thermaltake|DeepCool|MasterPlus|Aquasuite|SignalRGB|OpenRGB|FanControl|Armoury Crate|MSI Center|Lian Li'
+$coolDevs = @()
+try { $coolDevs = @(Get-PnpDevice -PresentOnly -ErrorAction Stop | Where-Object { "$($_.FriendlyName)" -match $coolKw -or ("$($_.InstanceId)" -match 'VID_1E71') } | ForEach-Object { "$($_.FriendlyName)" } | Sort-Object -Unique) } catch {}
+$coolApps = @()
+foreach ($k in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*') {
+    $coolApps += @(Get-ItemProperty $k -ErrorAction SilentlyContinue | Where-Object { "$($_.DisplayName)" -match $coolSoft } | ForEach-Object { $_.DisplayName })
+}
+$coolApps = @($coolApps | Sort-Object -Unique)
+$cool0 = Read-Cooling
+$aio = ($cool0.Coolers.Count -gt 0 -or $null -ne $cool0.Pump -or $null -ne $cool0.Liquid -or @($coolDevs | Where-Object { $_ -match 'Kraken|Capellix|H1[0-9]{2}i|Ryujin|Ryuo|Galahad|Floe|Coreliquid|Liquid|AIO|Hydro|D5' }).Count -gt 0)
+$aioLcd = (@($coolDevs + $cool0.Coolers | Where-Object { $_ -match 'Elite|LCD|Z[0-9]{2}|Ryujin|Galahad II LCD|Screen|Display' }).Count -gt 0)
+$coolType = $(if ($isLaptop) { 'Ventilation intégrée (portable)' }
+              elseif ($aio) { "Watercooling tout-en-un$(if ($aioLcd) { ' avec écran' })$(if ($cool0.Coolers.Count) { ' : ' + ($cool0.Coolers -join ', ') } elseif ($coolDevs.Count) { ' : ' + (($coolDevs | Select-Object -First 2) -join ', ') })" }
+              elseif ($coolApps.Count) { 'Ventirad ou watercooling (logiciel de refroidissement installé)' }
+              else { 'Ventirad (refroidissement par air) probable' })
+Write-Host "   Refroidissement : $coolType" -ForegroundColor DarkGray
+
 # ---------------------------------------------------------------- 11
 Step 11 "Test de charge du processeur ($stressMin min, tous les cœurs)"
 $seconds = $stressMin * 60
@@ -1112,7 +1154,8 @@ if ($benchOk) {
         if (-not $temp -and -not $lhmCpuOk) { try { $tz = Get-CimInstance -Namespace root\wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop | Select-Object -First 1; $temp = [math]::Round($tz.CurrentTemperature / 10 - 273.15) } catch {} }
         if (-not $temp -and -not $lhmCpuOk) { try { $tz = Get-CimInstance Win32_PerfFormattedData_Counters_ThermalZoneInformation -ErrorAction Stop | Select-Object -First 1; if ($tz.HighPrecisionTemperature) { $temp = [math]::Round($tz.HighPrecisionTemperature / 10 - 273.15) } } catch {} }
         $el = [int]((Get-Date) - $start).TotalSeconds
-        $samples.Add([pscustomobject]@{ T = $el; Charge = $load; MHz = $freq; Temp = $temp })
+        $ck = Read-Cooling
+        $samples.Add([pscustomobject]@{ T = $el; Charge = $load; MHz = $freq; Temp = $temp; Pump = $ck.Pump; Liquid = $ck.Liquid; FanMax = $(if ($ck.Fans.Count) { ($ck.Fans | Measure-Object -Maximum).Maximum } else { $null }); FanMin = $(if ($ck.Fans.Count) { ($ck.Fans | Measure-Object -Minimum).Minimum } else { $null }) })
         Write-Progress -Activity 'Test de charge processeur' -Status "Charge $load %  |  $freq MHz  |  temp. capteur : $temp C" -PercentComplete ([math]::Min(100, 100 * $el / $seconds))
     }
     $r = [DiagBench]::Finish(); $okTot = $r[0]; $badTot = $r[1]
@@ -1124,6 +1167,23 @@ $firstF = ($samples | Where-Object { $_.T -le 60 -and $_.MHz } | Measure-Object 
 $lastF  = ($samples | Where-Object { $_.T -gt ($seconds / 2) -and $_.MHz } | Measure-Object -Property MHz -Average).Average
 $maxT   = ($samples | Where-Object { $_.Temp -and $_.Temp -gt 0 -and $_.Temp -lt 120 } | Measure-Object -Property Temp -Maximum).Maximum
 $freqDrop = ($firstF -and $lastF -and $lastF -lt 0.75 * $firstF)
+$pumpMin = ($samples | Where-Object { $null -ne $_.Pump } | Measure-Object -Property Pump -Minimum).Minimum
+$pumpMax = ($samples | Where-Object { $null -ne $_.Pump } | Measure-Object -Property Pump -Maximum).Maximum
+$liqMax  = ($samples | Where-Object { $_.Liquid } | Measure-Object -Property Liquid -Maximum).Maximum
+$fanMax  = ($samples | Where-Object { $_.FanMax } | Measure-Object -Property FanMax -Maximum).Maximum
+Add-Table 'Refroidissement' ([ordered]@{
+    'Type'                          = $coolType
+    'Logiciels de refroidissement'  = $(if ($coolApps.Count) { $coolApps -join ', ' } else { 'aucun' })
+    'Pompe (sous charge)'           = $(if ($null -ne $pumpMax) { "$([int]$pumpMin) à $([int]$pumpMax) tr/min" } elseif ($aio) { 'vitesse non lisible (ajouter LibreHardwareMonitor)' } else { '-' })
+    'Température du liquide (max)'  = $(if ($liqMax) { "$([math]::Round($liqMax, 1)) C" } elseif ($aio) { 'non lisible' } else { '-' })
+    'Ventilateurs (max sous charge)' = $(if ($fanMax) { "$([int]$fanMax) tr/min" } else { 'non lisible' })
+})
+if ($aio) {
+    if ($null -ne $pumpMin -and $pumpMin -lt 300) { Add-Alert ROUGE "La pompe du watercooling tourne à $([int]$pumpMin) tr/min : pompe arrêtée ou défaillante, risque de surchauffe." 25 }
+    elseif ($null -ne $pumpMax) { Add-Alert OK "Pompe du watercooling active ($([int]$pumpMax) tr/min)." }
+    if ($liqMax -and $liqMax -ge 45) { Add-Alert ORANGE "Liquide du watercooling à $([math]::Round($liqMax, 1)) C sous charge : radiateur encrassé, ventilateurs trop lents ou liquide en baisse." 8 }
+    elseif ($liqMax) { Add-Alert OK "Liquide du watercooling à $([math]::Round($liqMax, 1)) C sous charge." }
+}
 Add-Table 'Test de charge processeur' ([ordered]@{
     'Durée'                          = "$stressMin min sur $threads threads"
     'Calculs vérifiés'               = "$okTot corrects / $badTot faux"
@@ -2029,19 +2089,23 @@ if ($gPlan) {
 if ($xmpOff) { Add-Upg 1 'Réglage BIOS (gratuit)' "Activer le profil XMP/EXPO dans le BIOS pour que la RAM tourne à $($mods[0].Speed) MT/s (actuellement $($mods[0].ConfiguredClockSpeed))." 'Performance mémoire gratuite, en 2 minutes.' }
 if (($gpuOnMain -and $null -ne $gpuDrop -and $gpuDrop -ge 20) -or ($gpuMaxT -and $gpuMaxT -ge 84) -or ($gpuMaxHot -and $gpuMaxHot -ge 100)) { Add-Upg 1 'Refroidissement carte graphique' 'Dépoussiérer la carte graphique et le boîtier, vérifier que ses ventilateurs tournent ; si la carte a plus de 3 ans, faire changer sa pâte et ses pads thermiques. Améliorer la ventilation du boîtier.' 'La carte garde toute sa puissance en jeu et dure plus longtemps.' }
 if ($gpuRes -and ($gpuRes.lost -or $gpuRes.errors -gt 0)) { Add-Upg 1 'Carte graphique' 'Instabilité détectée : réinstaller proprement le pilote (DDU), retirer tout overclocking (MSI Afterburner), vérifier lʼalimentation et les câbles PCIe, puis refaire le test. Si les erreurs persistent : carte défectueuse.' 'Plus de plantages ni dʼartefacts en jeu.' }
-if ($freqDrop -or ($maxT -and $maxT -gt 90)) { Add-Upg 1 'Refroidissement' 'Nettoyer la poussière, vérifier les ventilateurs / le ventirad et refaire la pâte thermique.' 'Le processeur ne sera plus bridé par la chaleur.' }
+if ($freqDrop -or ($maxT -and $maxT -gt 90) -or ($aio -and (($null -ne $pumpMin -and $pumpMin -lt 300) -or ($liqMax -and $liqMax -ge 45)))) {
+    if ($aio) { Add-Upg 1 'Watercooling' 'Vérifier que la pompe tourne et nʼémet pas de bruit de bulles, dépoussiérer le radiateur, vérifier le sens et la vitesse des ventilateurs du radiateur. Un watercooling tout-en-un de plus de 5 ans peut avoir perdu du liquide : le remplacer.' 'Le processeur ne sera plus bridé par la chaleur.' }
+    elseif ($isLaptop) { Add-Upg 1 'Refroidissement' 'Nettoyer les aérations et le ventilateur (bombe dʼair), utiliser le portable sur une surface dure ; si le portable a plus de 3 ans, faire refaire la pâte thermique.' 'Le processeur ne sera plus bridé par la chaleur.' }
+    else { Add-Upg 1 'Refroidissement' 'Nettoyer la poussière, vérifier les ventilateurs et le ventirad, refaire la pâte thermique ; si le ventirad est petit, passer à un modèle plus grand ou à un watercooling 240/360 mm.' 'Le processeur ne sera plus bridé par la chaleur.' }
+}
 if ($badTot -gt 0) { Add-Upg 1 'Processeur' 'Calculs faux sous charge : remettre le BIOS par défaut (désactiver lʼoverclocking), vérifier le refroidissement, puis tester à nouveau.' 'Stabilité (plantages, fichiers corrompus).' }
 if ($ramErrors -gt 0) { Add-Upg 1 'Mémoire vive' 'Erreurs RAM : désactiver XMP pour tester, refaire le test complet de Windows (mdsched) barrette par barrette et remplacer la barrette défectueuse.' 'Stabilité.' }
 if ($channels -eq 1 -and $slots -ge 2 -and -not $ramSoldered -and -not ($gPlan -and @($gPlan.Items | Where-Object Key -eq 'RAM').Count)) {
     $m0 = $mods[0]; Add-Upg 2 'Mémoire vive' "Ajouter une barrette identique ($($m0.Manufacturer) $((''+$m0.PartNumber).Trim()), $(GB $m0.Capacity) Go) pour passer en double canal." 'Bande passante mémoire x2 (jeux et montage plus fluides avec une puce graphique intégrée).'
 }
 if ($c -and $sizeC -gt 0 -and $freeC / $sizeC -lt 0.1) { Add-Upg 1 'Stockage' "Libérer de la place sur C: ($freeC Go libres) ou ajouter un SSD." 'Un disque plein ralentit tout le PC.' }
-foreach ($r in $nvmeRows) { if ($r.'Usure %' -ge 50) { Add-Upg 1 'Stockage' "SSD $($r.Disque) usé à $($r.'Usure %') % : sauvegarder les données et prévoir son remplacement." 'Éviter une perte de données.' } }
+foreach ($nr in $nvmeRows) { if ($nr.'Usure %' -ge 50) { Add-Upg 1 'Stockage' "SSD $($nr.Disque) usé à $($nr.'Usure %') % : sauvegarder les données et prévoir son remplacement." 'Éviter une perte de données.' } }
 if ($battHealth -and $battHealth -lt 70) { Add-Upg 2 'Batterie' "Batterie à $battHealth % : la remplacer (référence exacte selon le modèle $($cs.Model))." 'Retrouver lʼautonomie dʼorigine.' }
 try { if (((Get-Date) - $bios.ReleaseDate).TotalDays -gt 365) { Add-Upg 2 'BIOS' "BIOS du $biosDate : le mettre à jour depuis le site du fabricant ($($bb.Manufacturer) $($bb.Product))." 'Corrections de stabilité, de sécurité et de compatibilité.' } } catch {}
 if (-not $winActive) { Add-Upg 1 'Windows' 'Windows non activé : installer une licence valide.' 'Mises à jour et personnalisation complètes.' }
-foreach ($g in $gpus) {
-    try { if (-not $g.Igpu -and $g.DriverDate -and ((Get-Date) - $g.DriverDate).TotalDays -gt 180) { Add-Upg 2 'Pilote graphique' "Pilote du $($g.DriverDate.ToString('dd/MM/yyyy')) : installer le dernier (NVIDIA App / AMD Adrenalin / Intel Arc Control)." 'Performances en jeu et compatibilité des logiciels de montage et dʼIA.' } } catch {}
+foreach ($gx in $gpus) {
+    try { if (-not $gx.Igpu -and $gx.DriverDate -and ((Get-Date) - $gx.DriverDate).TotalDays -gt 180) { Add-Upg 2 'Pilote graphique' "Pilote du $($gx.DriverDate.ToString('dd/MM/yyyy')) : installer le dernier (NVIDIA App / AMD Adrenalin / Intel Arc Control)." 'Performances en jeu et compatibilité des logiciels de montage et dʼIA.' } } catch {}
 }
 if ($badDev.Count) { Add-Upg 2 'Pilotes' "Installer les pilotes manquants ($($badDev.Count) périphérique(s) en erreur) via Windows Update ou le site du fabricant." 'Tous les composants fonctionnels (Wi-Fi, audio, USB...).' }
 if ($minHits.Count -or $threatsN -gt 0) { Add-Upg 2 'Windows' 'Réinitialiser Windows (Paramètres > Système > Récupération > Réinitialiser ce PC).' 'Repartir dʼun système propre.' }
@@ -2111,8 +2175,15 @@ if ($null -ne $scrScore) {
 }
 $compRows += ,@('Mémoire vive', "$ramTotal Go $ramType, $channels canal(aux)$(if ($ramSoldered) { ', soudée' })", [int]$Ridx, $(if ($memBw) { "Bande passante mesurée : $memBw Go/s" } else { '' }), '100 = 64 Go double canal ; 85 = 32 Go ; 55 = 16 Go')
 $compRows += ,@('Stockage', "$(if ($sysDisk) { $sysDisk.FriendlyName } else { 'Disque C:' }) - $sysKind", [int]$D, "Écriture $writeMBs Mo/s$(if ($seqRead) { ", lecture $([int]$seqRead) Mo/s" }), $freeC Go libres$(if ($null -ne $sysWear) { ", usure $sysWear %" })", '100 = SSD NVMe rapide (> 2 500 Mo/s) avec de la place')
+$refScores = [ordered]@{
+    'Cinebench R23 (processeur)'     = "≈ $([int]($S * 23)) pts en 1 cœur, ≈ $([int]($M * 420)) pts en multi-cœurs"
+    'Geekbench 6 (processeur)'       = "≈ $([int]($S * 34)) en 1 cœur, ≈ $([int]($M * 210)) en multi-cœurs"
+    'PassMark CPU Mark'              = "≈ $([int]($M * 660))"
+    '3DMark Time Spy (graphique)'    = "≈ $([int]($G * 480)) pts"
+}
+$refHtml = '<table>' + (($refScores.Keys | ForEach-Object { "<tr><th>$(Enc $_)</th><td>$(Enc $refScores[$_])</td></tr>" }) -join '') + '</table><p class="small">Équivalences estimées à partir des mesures du diagnostic et de la base de modèles, pour comparer avec les scores publiés sur internet (marge dʼerreur de 10 à 25 %).</p>'
 $h = "<table><tr><th>Composant</th><th>Modèle</th><th style='min-width:150px'>Note</th><th>Détail</th><th>Référence</th></tr>"
-foreach ($r in $compRows) { $h += "<tr><td><b>$(Enc $r[0])</b></td><td>$(Enc $r[1])</td><td>$(Bar $r[2])</td><td>$(Enc $r[3])</td><td class='small'>$(Enc $r[4])</td></tr>" }
+foreach ($cr in $compRows) { $h += "<tr><td><b>$(Enc $cr[0])</b></td><td>$(Enc $cr[1])</td><td>$(Bar $cr[2])</td><td>$(Enc $cr[3])</td><td class='small'>$(Enc $cr[4])</td></tr>" }
 $compHtml = $h + '</table>'
 
 $h = "<table><tr><th>Usage</th><th style='min-width:150px'>Note</th><th>Verdict</th><th>Pour lʼaméliorer</th></tr>"
@@ -2194,6 +2265,8 @@ $(if ($healthLv -eq 'r') { "<div class='banner r'>Problème de santé : $(Enc ((
 $usageHtml
 <h2>Notes par composant</h2>
 $compHtml
+<h2>Scores de référence (équivalences estimées)</h2>
+$refHtml
 <h2>Améliorations conseillées</h2>
 $upgHtml
 $(if ($fixedItems.Count) { "<p class='small'><b>Non améliorable sur ce PC :</b> $(Enc (($fixedItems | ForEach-Object { $_.Short }) -join ' ; ')).</p>" })
@@ -2222,7 +2295,9 @@ $sum = @("DIAGNOSTIC PC - $(Get-Date -Format 'dd/MM/yyyy HH:mm') - outil v$VERSI
          "$cpuName | $gpuName | $ramTotal Go $ramType | $sysKind",
          '', "PUISSANCE : $power / 100 ($cat)", "SANTÉ : $health / 100 ($healthTxt)", "VERDICT : $confTxt", '',
          'COMPOSANTS :')
-foreach ($r in $compRows) { $sum += " - $($r[0]) : $($r[2])/100 - $($r[1]) - $($r[3])" }
+foreach ($cr in $compRows) { $sum += " - $($cr[0]) : $($cr[2])/100 - $($cr[1]) - $($cr[3])" }
+$sum += ''; $sum += 'SCORES DE RÉFÉRENCE (estimés) :'; foreach ($k in $refScores.Keys) { $sum += " - ${k} : $($refScores[$k])" }
+$sum += "REFROIDISSEMENT : $coolType$(if ($null -ne $pumpMax) { " | pompe $([int]$pumpMin)-$([int]$pumpMax) tr/min" })$(if ($liqMax) { " | liquide $([math]::Round($liqMax,1)) C" })"
 $sum += ''; $sum += 'USAGES :'
 foreach ($ur in $usageRes) {
     $line = " $(if ($ur.Sel) { '*' } else { '-' }) $($ur.U.Nom) : $($ur.Score)/100 ($($ur.Lv.Txt))"
