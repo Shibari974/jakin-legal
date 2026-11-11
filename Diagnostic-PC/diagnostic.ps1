@@ -13,9 +13,10 @@
 #  Ne modifie rien sur le PC. Seul un fichier temporaire de 2 Go est écrit
 #  puis supprimé pour mesurer la vitesse du disque.
 # =====================================================================
+param([switch]$Reprise)
 $ErrorActionPreference = 'Continue'
 $Error.Clear()
-$VERSION = '2.8'
+$VERSION = '2.9'
 try { $Host.UI.RawUI.WindowTitle = 'Diagnostic PC' } catch {}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportDir = Join-Path $root 'Rapports'
@@ -23,6 +24,15 @@ New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
 $stamp = Get-Date -Format 'yyyy-MM-dd_HH-mm'
 $reportPath = Join-Path $reportDir ("Diagnostic_{0}_{1}.html" -f $env:COMPUTERNAME, $stamp)
 $TOTAL = 17
+$stateDir  = Join-Path $env:LOCALAPPDATA 'DiagnosticPC'
+$stateFile = Join-Path $stateDir 'reprise.json'
+$taskName  = 'DiagnosticPC-Reprise'
+$resume = $null
+if ($Reprise) {
+    # Relancé automatiquement après le test complet de la mémoire : on retire la tâche et on relit les choix
+    try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop } catch { & schtasks /Delete /TN $taskName /F 2>&1 | Out-Null }
+    try { $resume = Get-Content $stateFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch {}
+}
 
 # =====================================================================
 #  BASE DE DONNÉES (à mettre à jour quand de nouveaux modèles sortent)
@@ -389,6 +399,12 @@ Write-Host 'Fermez les autres programmes pendant le test.'
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) { Write-Host 'ATTENTION : pas en administrateur, certaines infos manqueront.' -ForegroundColor Yellow }
 Write-Host ''
+if ($resume) {
+    $selected = @($resume.selected | ForEach-Object { [int]$_ })
+    $fullMode = [bool]$resume.fullMode
+    Write-Host 'Reprise automatique après le test complet de la mémoire de Windows.' -ForegroundColor Green
+    Write-Host "Usages : $(if ($selected.Count) { $selected -join ' ' } else { 'tous' }) | analyse $(if ($fullMode) { 'complète' } else { 'rapide' })" -ForegroundColor Green
+} else {
 Write-Host 'Pour quels usages veux-tu vérifier ce PC ?' -ForegroundColor Cyan
 foreach ($u in $USAGES) { Write-Host ("   {0}. {1}" -f $u.Id, $u.Nom) }
 $sel = Read-Host 'Tape les numéros séparés par des espaces (ex : 3 7 9), ou Entrée pour tout évaluer'
@@ -403,9 +419,48 @@ Write-Host '   1. Rapide   (environ 20 min)'
 Write-Host '   2. Complète (environ 45 min : processeur 15 min, carte graphique 10 min, RAM vérifiée en profondeur)'
 $ans = Read-Host 'Ton choix (Entrée = 1)'
 $fullMode = ($ans -match '^\s*2')
+}
 $stressMin = $(if ($fullMode) { 15 } else { 5 })
 $gpuSecMode = $(if ($fullMode) { 600 } else { 90 })
 $ramPasses = $(if ($fullMode) { 6 } else { 3 })
+if (-not $resume) {
+    Write-Host ''
+    Write-Host 'Test complet de la RAM par Windows (recommandé, 15 à 30 min de plus) :' -ForegroundColor Cyan
+    Write-Host '   O = le PC redémarre maintenant, Windows teste la RAM, puis le diagnostic se relance TOUT SEUL'
+    Write-Host '       et affiche le rapport final à la toute fin (garde la clé branchée).'
+    Write-Host '   N = pas de redémarrage (test de la RAM en direct uniquement).'
+    $memAns = Read-Host 'Ton choix (O/N, Entrée = N)'
+    if ($memAns -match '^[oOyY]') {
+        $planOk = $false
+        try {
+            # Copie de lʼoutil sur le PC (au cas où la lettre de la clé change au redémarrage)
+            $appDir = Join-Path $stateDir 'outil'
+            if (Test-Path $appDir) { Remove-Item $appDir -Recurse -Force -ErrorAction SilentlyContinue }
+            New-Item -ItemType Directory -Force -Path $appDir | Out-Null
+            Get-ChildItem $root -Force | Where-Object { $_.Name -ne 'Rapports' } | ForEach-Object { Copy-Item $_.FullName -Destination $appDir -Recurse -Force }
+            [pscustomobject]@{ selected = $selected; fullMode = $fullMode; origRoot = $root; planned = (Get-Date).ToString('o') } | ConvertTo-Json | Out-File -FilePath $stateFile -Encoding UTF8
+            # Tâche planifiée : relance le diagnostic en administrateur à lʼouverture de session, sans question
+            $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+            $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $appDir 'diagnostic.ps1')`" -Reprise"
+            $trg = New-ScheduledTaskTrigger -AtLogOn -User $me; $trg.Delay = 'PT20S'
+            $prc = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Highest
+            Register-ScheduledTask -TaskName $taskName -Action $act -Trigger $trg -Principal $prc -Force -ErrorAction Stop | Out-Null
+            & bcdedit /bootsequence '{memdiag}' 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'bcdedit' }
+            $planOk = $true
+        } catch {
+            try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+            Write-Host "   Impossible de préparer le redémarrage ($($_.Exception.Message)) : le diagnostic continue sans le test complet." -ForegroundColor Yellow
+        }
+        if ($planOk) {
+            Write-Host ''
+            Write-Host 'Tout est prêt. Le PC redémarre dans 20 secondes (ferme tes documents ouverts).' -ForegroundColor Green
+            Write-Host 'Après le test de la mémoire, ouvre ta session : le diagnostic reprendra tout seul.' -ForegroundColor Green
+            & shutdown.exe /r /t 20 /c "Diagnostic PC : test complet de la mémoire au redémarrage" | Out-Null
+            exit
+        }
+    }
+}
 Write-Host 'Avant de laisser tourner : mets le volume du PC vers 50 % (test automatique du son), dans une pièce calme, chargeur branché.' -ForegroundColor Yellow
 Write-Host ''
 Init-Lhm
@@ -1020,10 +1075,14 @@ if ($ramOk -and $testBytes -ge 512MB) {
 } elseif ($ramOk) { Write-Host '   Trop peu de mémoire libre pour un test en direct : le test complet de Windows sera proposé à la fin.' -ForegroundColor Yellow }
 # Résultat du test complet de Windows (Diagnostic de mémoire Windows), sʼil a déjà été lancé
 $mdRes = $null
-try {
-    $ev = Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-MemoryDiagnostics-Results' } -MaxEvents 1 -ErrorAction Stop
-    $mdRes = [pscustomobject]@{ Date = $ev.TimeCreated; Bad = (@(1102, 1202) -contains $ev.Id) }
-} catch {}
+$mdTries = $(if ($resume) { 12 } else { 1 })
+for ($i = 0; $i -lt $mdTries -and -not $mdRes; $i++) {
+    try {
+        $ev = Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-MemoryDiagnostics-Results' } -MaxEvents 1 -ErrorAction Stop
+        if (-not $resume -or $ev.TimeCreated -ge ([datetime]$resume.planned)) { $mdRes = [pscustomobject]@{ Date = $ev.TimeCreated; Bad = (@(1102, 1202) -contains $ev.Id) } }
+    } catch {}
+    if (-not $mdRes -and $i -lt $mdTries - 1) { Write-Host '   Attente du résultat du test de la mémoire de Windows...' -ForegroundColor DarkGray; Start-Sleep -Seconds 10 }
+}
 if ($mdRes) {
     if ($mdRes.Bad) { Add-Alert ROUGE "Le test complet de la mémoire de Windows du $($mdRes.Date.ToString('dd/MM/yyyy')) a trouvé des erreurs matérielles." 40; $ramErrors = [math]::Max($ramErrors, 1) }
     else { Add-Alert OK "Test complet de la mémoire de Windows du $($mdRes.Date.ToString('dd/MM/yyyy')) : aucune erreur." }
@@ -1799,45 +1858,7 @@ if ($doUsb -match '^[oOyY]') {
     if ($usbPorts -gt 0) { Add-Alert OK "$usbPorts port(s) USB testé(s) : fonctionnent." }
     Write-Host "   $usbPorts port(s) USB fonctionnel(s). Si un port nʼa rien affiché, il est probablement défectueux." -ForegroundColor Cyan
 }
-# Test complet de la mémoire par Windows au prochain redémarrage
 $mdScheduled = $false
-if ($fullMode -or $ramErrors -gt 0 -or -not $mdRes -or $ramTested -eq 0) {
-    $q = Read-Host 'Programmer le test complet de la RAM de Windows au prochain redémarrage (10 à 20 min, puis relance ce diagnostic pour lire le résultat) ? (O/N)'
-    if ($q -match '^[oOyY]') {
-        & bcdedit /bootsequence '{memdiag}' 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            $mdScheduled = $true
-            # Petit script qui affichera le résultat tout seul après le redémarrage (même sans la clé)
-            try {
-                $resDir = Join-Path $env:LOCALAPPDATA 'DiagnosticPC'
-                New-Item -ItemType Directory -Force -Path $resDir | Out-Null
-                $resPs1 = Join-Path $resDir 'resultat-memoire.ps1'
-                $resCode = @'
-Add-Type -AssemblyName System.Windows.Forms
-$ev = $null
-for ($i = 0; $i -lt 30 -and -not $ev; $i++) {
-    try { $ev = Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-MemoryDiagnostics-Results'; StartTime = (Get-Date).AddHours(-3) } -MaxEvents 1 -ErrorAction Stop } catch { Start-Sleep -Seconds 10 }
-}
-if ($ev) {
-    $bad = @(1102, 1202) -contains $ev.Id
-    $txt = $(if ($bad) { "ERREURS DÉTECTÉES dans la mémoire vive (RAM).`n`nUne barrette est probablement défectueuse : relance le Diagnostic PC pour les conseils." } else { "Aucune erreur dans la mémoire vive (RAM).`n`nLa RAM de ce PC est saine." })
-    $icon = $(if ($bad) { 'Error' } else { 'Information' })
-    [void][System.Windows.Forms.MessageBox]::Show("Test complet de la mémoire Windows du $($ev.TimeCreated.ToString('dd/MM/yyyy HH:mm')) :`n`n$txt", 'Diagnostic PC', 'OK', $icon)
-} else {
-    [void][System.Windows.Forms.MessageBox]::Show("Le résultat du test de la mémoire nʼest pas encore disponible.`nRelance le Diagnostic PC : il le lira dans le rapport.", 'Diagnostic PC', 'OK', 'Information')
-}
-Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
-'@
-                $resCode | Out-File -FilePath $resPs1 -Encoding UTF8
-                $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$resPs1`""
-                if (-not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce')) { New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' | Out-Null }
-                Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -Name 'DiagnosticPC-Memoire' -Value $cmd
-            } catch {}
-            Write-Host '   Programmé : le test se lancera tout seul au prochain redémarrage, et son résultat sʼaffichera ensuite automatiquement.' -ForegroundColor Green
-        }
-        else { Write-Host '   Impossible de le programmer (lance « mdsched » depuis le menu Démarrer).' -ForegroundColor Yellow }
-    }
-}
 $questions = [ordered]@{
     'État extérieur correct (pas de choc ni fissure, charnières solides)' = 'État physique douteux signalé.'
 }
@@ -2375,6 +2396,10 @@ $sum | Out-File -FilePath $txtPath -Encoding UTF8
 Write-Host ''
 Write-Host "Rapport enregistré : $reportPath"
 Write-Host "Résumé texte (à envoyer à Claude) : $txtPath"
+if ($resume -and $resume.origRoot -and (Test-Path $resume.origRoot)) {
+    try { $dst = Join-Path $resume.origRoot 'Rapports'; New-Item -ItemType Directory -Force -Path $dst | Out-Null; Copy-Item $reportPath, $txtPath -Destination $dst -Force; Write-Host "Copie sur la clé : $dst" } catch {}
+}
+if ($resume) { Remove-Item $stateFile -Force -ErrorAction SilentlyContinue }
 Start-Process $reportPath
 if ($lhm) { try { $lhm.Close() } catch {} }
 

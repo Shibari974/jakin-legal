@@ -1,4 +1,4 @@
-﻿DIAGNOSTIC PC COMPLET (v2.8) - MODE D'EMPLOI
+﻿DIAGNOSTIC PC COMPLET (v2.9) - MODE D'EMPLOI
 ============================================
 
 Un seul outil, entièrement automatique, qui remplace plusieurs petits logiciels
@@ -21,6 +21,9 @@ PC de bureau et portables, Windows 10 / 11.
      puis "Exécuter quand même".
    - Choisis tes usages (ex. : 3 7 9) ou Entrée pour tout évaluer.
    - Choisis le type d'analyse : 1 = rapide (20 min), 2 = complète (45 min).
+   - Test complet de la RAM par Windows : réponds O pour l'inclure. Le PC redémarre, Windows
+     teste la RAM (15 à 30 min), puis à l'ouverture de session le diagnostic reprend TOUT SEUL
+     (sans redemander tes choix) et le rapport final s'affiche à la toute fin, avec tout dedans.
    - Laisse tourner. Une fenêtre plein écran s'ouvre pour le test de la carte graphique
      et un bip retentit pour le test du son : c'est normal.
    - À la fin : test visuel de l'écran, test des ports USB (avec une souris ou un téléphone,
@@ -43,8 +46,7 @@ PC de bureau et portables, Windows 10 / 11.
          webcam, contrôleurs USB, vitesse du port USB
    16    (facultatif) Vraie capacité d'une clé USB / d'un disque externe (contrefaçons)
    17    Écran (8 motifs plein écran), ports USB (détection automatique de chaque port),
-         proposition de programmer le test complet de la RAM de Windows au prochain
-         redémarrage (son résultat s'affiche tout seul à l'ouverture de session)
+         état extérieur, puis RAPPORT FINAL (avec le test complet de la RAM s'il a été choisi)
 
    Seul l'état extérieur (chocs, fissures, charnières) reste à vérifier à l'œil.
 
