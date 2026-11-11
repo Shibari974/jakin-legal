@@ -3,8 +3,8 @@
 #  Remplace plusieurs petits logiciels (infos système, SMART, benchmark,
 #  test RAM, test de charge...) et dit ce que le PC est capable de faire :
 #  bureautique, jeu 1080p / 1440p / 4K, streaming, montage vidéo, 3D,
-#  IA locale. Pour chaque usage : une note /100, un verdict, et ce qu’il
-#  faut changer pour l’améliorer (avec la note estimée après amélioration).
+#  IA locale. Pour chaque usage : une note /100, un verdict, et ce quʼil
+#  faut changer pour lʼaméliorer (avec la note estimée après amélioration).
 #  v2.1 : vrai test de la carte graphique (puissance, erreurs de calcul,
 #  chauffe), vraies températures (LibreHardwareMonitor facultatif,
 #  nvidia-smi), test de vraie capacité des clés USB / disques externes.
@@ -14,7 +14,7 @@
 #  puis supprimé pour mesurer la vitesse du disque.
 # =====================================================================
 $ErrorActionPreference = 'Continue'
-$VERSION = '2.1'
+$VERSION = '2.2'
 try { $Host.UI.RawUI.WindowTitle = 'Diagnostic PC' } catch {}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportDir = Join-Path $root 'Rapports'
@@ -73,7 +73,7 @@ $IGPU_DB = @(
 )
 
 # --- Cartes graphiques conseillées, de la moins chère à la plus chère
-#     G = indice, V = mémoire vidéo, Nv = NVIDIA (indispensable pour la plupart des outils d’IA), W = alimentation conseillée
+#     G = indice, V = mémoire vidéo, Nv = NVIDIA (indispensable pour la plupart des outils dʼIA), W = alimentation conseillée
 $GPU_SHOP = @(
     [pscustomobject]@{ N = 'Intel Arc B580 12 Go';                       G = 22;  V = 12; Nv = $false; W = 550 }
     [pscustomobject]@{ N = 'NVIDIA GeForce RTX 5060 8 Go';               G = 25;  V = 8;  Nv = $true;  W = 550 }
@@ -116,7 +116,7 @@ $CPU_SOCKET_NOTE = @{
     'AM5'     = 'Mettre à jour le BIOS de la carte mère avant le changement.'
     'LGA1700' = 'Mettre à jour le BIOS AVANT (correctif de stabilité Intel pour les 13e/14e génération).'
     'LGA1851' = 'Mettre à jour le BIOS avant le changement.'
-    'LGA1200' = 'Plateforme ancienne : vérifier la compatibilité de la carte mère (les cartes H410/B460 n’acceptent pas la 11e génération).'
+    'LGA1200' = 'Plateforme ancienne : vérifier la compatibilité de la carte mère (les cartes H410/B460 nʼacceptent pas la 11e génération).'
 }
 # Plateforme neuve conseillée si le support actuel est trop ancien
 $PLATFORM_NEW = @(
@@ -138,7 +138,7 @@ $USAGES = @(
     [pscustomobject]@{ Id = 6; Nom = 'Montage vidéo 1080p';                     C = 'M';   T = @{ M = 28; S = 60; R = 16; G = 12; D = 60 };     W = @{ M = 3; S = 1;   R = 2;   G = 1.5; D = 1.5 } }
     [pscustomobject]@{ Id = 7; Nom = 'Montage vidéo 4K / 360';                  C = 'M';   T = @{ M = 55; S = 75; R = 32; G = 30; V = 8; D = 80 }; W = @{ M = 3; S = 1; R = 2.5; G = 2; V = 1; D = 1.5 } }
     [pscustomobject]@{ Id = 8; Nom = '3D : Unreal Engine 5, Blender';           C = 'G';   T = @{ G = 45; V = 12; M = 50; R = 32; D = 70 };     W = @{ G = 4; V = 2;   M = 2;   R = 2;   D = 1 } }
-    [pscustomobject]@{ Id = 9; Nom = 'IA en local (chatbot, génération d’images)'; C = 'V'; T = @{ V = 16; G = 28; R = 32; D = 60 };           W = @{ V = 5; G = 2;   R = 2;   D = 1 } }
+    [pscustomobject]@{ Id = 9; Nom = 'IA en local (chatbot, génération dʼimages)'; C = 'V'; T = @{ V = 16; G = 28; R = 32; D = 60 };           W = @{ V = 5; G = 2;   R = 2;   D = 1 } }
 )
 
 # =====================================================================
@@ -221,7 +221,7 @@ function Init-Lhm {
         $t0 = Read-Lhm
         $script:lhmCpuOk = ($null -ne $t0.Cpu)
         Write-Host "   LibreHardwareMonitor chargé (temp. processeur : $(if ($t0.Cpu) { "$([int]$t0.Cpu) C" } else { 'non lisible' }), carte graphique : $(if ($t0.Gpu) { "$([int]$t0.Gpu) C" } else { 'non lisible' }))." -ForegroundColor DarkGray
-    } catch { Write-Host "   LibreHardwareMonitor n’a pas pu démarrer : $($_.Exception.Message)" -ForegroundColor DarkGray }
+    } catch { Write-Host "   LibreHardwareMonitor nʼa pas pu démarrer : $($_.Exception.Message)" -ForegroundColor DarkGray }
 }
 function Read-Lhm {
     $o = [pscustomobject]@{ Cpu = $null; CpuPower = $null; Gpu = $null; GpuHot = $null }
@@ -396,11 +396,11 @@ $uptime = (Get-Date) - $os.LastBootUpTime
 Add-Table 'Windows' ([ordered]@{
     'Système'                         = "$($os.Caption) $($cv.DisplayVersion) (build $($cv.CurrentBuild))"
     'Activation'                      = $licText
-    'Date d’installation (ou de la dernière grosse mise à jour)' = $os.InstallDate.ToString('dd/MM/yyyy')
+    'Date dʼinstallation (ou de la dernière grosse mise à jour)' = $os.InstallDate.ToString('dd/MM/yyyy')
     'Allumé depuis'                   = "$([int]$uptime.TotalDays) j $($uptime.Hours) h"
     'Fabricant / modèle'              = "$($cs.Manufacturer) / $($cs.Model)"
 })
-if ($winActive) { Add-Alert OK 'Windows est activé.' } else { Add-Alert ORANGE "Windows n’est pas activé ($licText)." }
+if ($winActive) { Add-Alert OK 'Windows est activé.' } else { Add-Alert ORANGE "Windows nʼest pas activé ($licText)." }
 
 # ---------------------------------------------------------------- 2
 Step 2 'Processeur, carte mère, BIOS, type de PC'
@@ -442,9 +442,9 @@ if ($isLaptop) {
     } catch {}
     if ($batt.Count -and [int]$batt[0].BatteryStatus -eq 1) { Add-Alert ORANGE 'Le portable est sur batterie : branche le chargeur, sinon les performances mesurées seront plus basses.' }
     if ($null -ne $battHealth) {
-        $sections.Add("<p>Santé de la batterie : <b>$battHealth %</b> de sa capacité d’origine.</p>")
-        if ($battHealth -lt 60) { Add-Alert ROUGE "Batterie usée : $battHealth % de sa capacité d’origine (à remplacer)." 10 }
-        elseif ($battHealth -lt 80) { Add-Alert ORANGE "Batterie fatiguée : $battHealth % de sa capacité d’origine." 3 }
+        $sections.Add("<p>Santé de la batterie : <b>$battHealth %</b> de sa capacité dʼorigine.</p>")
+        if ($battHealth -lt 60) { Add-Alert ROUGE "Batterie usée : $battHealth % de sa capacité dʼorigine (à remplacer)." 10 }
+        elseif ($battHealth -lt 80) { Add-Alert ORANGE "Batterie fatiguée : $battHealth % de sa capacité dʼorigine." 3 }
         else { Add-Alert OK "Batterie en bon état ($battHealth %)." }
     }
 }
@@ -622,7 +622,7 @@ try {
             $row = [pscustomobject]@{
                 'Disque'               = $d.FriendlyName
                 'Allumages'            = & $u64 112
-                'Heures d’utilisation' = & $u64 128
+                'Heures dʼutilisation' = & $u64 128
                 'Arrêts brutaux'       = & $u64 144
                 'Usure %'              = $log[5]
                 'Réserve %'            = $log[3]
@@ -633,7 +633,7 @@ try {
             }
             $nvmeRows += $row
             if ([int]$d.DeviceId -eq $sysDiskNum -and $null -eq $sysWear) { $sysWear = [int]$log[5] }
-            Write-Host "   $($d.FriendlyName) : $($row.'Allumages') allumages, $($row.'Heures d’utilisation') h, $($row.'Données écrites') écrits, usure $($log[5]) %"
+            Write-Host "   $($d.FriendlyName) : $($row.'Allumages') allumages, $($row.'Heures dʼutilisation') h, $($row.'Données écrites') écrits, usure $($log[5]) %"
             if ($log[0] -ne 0) { Add-Alert ROUGE "SSD $($d.FriendlyName) : alerte critique SMART (code $($log[0]))." 40 }
             if ((& $u64 160) -gt 0) { Add-Alert ROUGE "SSD $($d.FriendlyName) : $(& $u64 160) erreurs média." 20 }
             if ($log[3] -lt $log[4]) { Add-Alert ROUGE "SSD $($d.FriendlyName) : réserve de secours épuisée ($($log[3]) %)." 30 }
@@ -695,7 +695,7 @@ if ($bsod -eq 0 -and $wheaFatal -eq 0 -and $diskBad -eq 0) { Add-Alert OK 'Aucun
 
 # ---------------------------------------------------------------- 7
 Step 7 'Benchmark Windows (WinSAT) - 2 à 5 min'
-Write-Host '   L’écran peut clignoter, c’est normal. Ne touchez à rien.' -ForegroundColor DarkGray
+Write-Host '   Lʼécran peut clignoter, cʼest normal. Ne touchez à rien.' -ForegroundColor DarkGray
 $ws = $null; $wx = $null
 try {
     Start-Process -FilePath "$env:windir\System32\winsat.exe" -ArgumentList 'formal -restart clean' -Wait -WindowStyle Hidden
@@ -921,7 +921,7 @@ if ($maxT -and $lhmCpuOk) {
 
 # ---------------------------------------------------------------- 12
 Step 12 'Test de la carte graphique (puissance, stabilité, chauffe) - 2 min'
-Write-Host '   Une fenêtre plein écran va s’ouvrir avec des motifs qui bougent. Ne touchez à rien.' -ForegroundColor DarkGray
+Write-Host '   Une fenêtre plein écran va sʼouvrir avec des motifs qui bougent. Ne touchez à rien.' -ForegroundColor DarkGray
 $gpuSec = 90
 $gpuHtml = @'
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Test carte graphique</title>
@@ -1104,13 +1104,13 @@ Add-Table 'Sécurité et état de Windows' ([ordered]@{
     'Chiffrement BitLocker (C:)'   = $(if ($bl) { "$($bl.ProtectionStatus) - $($bl.VolumeStatus)" } else { 'Non disponible / désactivé' })
     'Puce TPM (Windows 11)'        = $(if ($tpm) { "Présente : $($tpm.TpmPresent), prête : $($tpm.TpmReady)" } else { 'Inconnu' })
     'Démarrage sécurisé'           = $(if ($sb -eq $true) { 'Activé' } elseif ($sb -eq $false) { 'Désactivé' } else { 'Inconnu' })
-    'Antivirus Windows'            = $(if ($mp) { "Protection temps réel : $($mp.RealTimeProtectionEnabled), menaces dans l’historique : $threatsN" } else { 'Inconnu (autre antivirus ?)' })
+    'Antivirus Windows'            = $(if ($mp) { "Protection temps réel : $($mp.RealTimeProtectionEnabled), menaces dans lʼhistorique : $threatsN" } else { 'Inconnu (autre antivirus ?)' })
     'Indice de fiabilité Windows'  = $(if ($rel) { "$([math]::Round($rel.SystemStabilityIndex,1)) / 10" } else { 'Non disponible' })
     'Comptes utilisateurs actifs'  = ($users -join ', ')
     'Programmes au démarrage'      = $startupN
 })
 if ($bl -and "$($bl.ProtectionStatus)" -eq 'On') { Add-Alert ORANGE 'Disque C: chiffré par BitLocker : noter la clé de récupération (compte Microsoft) avant toute intervention.' }
-if ($threatsN -gt 0) { Add-Alert ORANGE "$threatsN menace(s) dans l’historique de l’antivirus." 3 }
+if ($threatsN -gt 0) { Add-Alert ORANGE "$threatsN menace(s) dans lʼhistorique de lʼantivirus." 3 }
 if ($rel -and $rel.SystemStabilityIndex -lt 5) { Add-Alert ORANGE "Indice de fiabilité Windows bas : $([math]::Round($rel.SystemStabilityIndex,1)) / 10." 5 }
 if ($sb -eq $false) { Add-Alert ORANGE 'Démarrage sécurisé désactivé (à réactiver dans le BIOS).' }
 if ($startupN -gt 15) { Add-Alert ORANGE "$startupN programmes se lancent au démarrage : le PC démarre plus lentement." }
@@ -1128,13 +1128,13 @@ foreach ($base in @("$env:ProgramFiles", "${env:ProgramFiles(x86)}", 'C:\') + @(
 $procs = @(Get-Process -ErrorAction SilentlyContinue | ForEach-Object ProcessName)
 $minHits = @(($apps + $folders + $procs) | Where-Object { $_ -match $mining } | Sort-Object -Unique)
 $ocHits  = @(($apps + $folders) | Where-Object { $_ -match $ocTools } | Sort-Object -Unique)
-Add-Table 'Traces de minage et d’overclocking' ([ordered]@{
+Add-Table 'Traces de minage et dʼoverclocking' ([ordered]@{
     'Logiciels de minage'     = $(if ($minHits.Count) { $minHits -join ', ' } else { 'Aucun trouvé' })
-    'Outils d’overclocking'   = $(if ($ocHits.Count) { $ocHits -join ', ' } else { 'Aucun trouvé' })
+    'Outils dʼoverclocking'   = $(if ($ocHits.Count) { $ocHits -join ', ' } else { 'Aucun trouvé' })
 })
 if ($minHits.Count) { Add-Alert ROUGE "Traces de MINAGE de cryptomonnaie : $($minHits -join ', '). La carte graphique a pu tourner à fond pendant des mois." 15 }
 else { Add-Alert OK 'Aucune trace de logiciel de minage.' }
-if ($ocHits.Count) { Add-Alert INFO "Outils d’overclocking installés ($($ocHits -join ', ')) : le PC a peut-être été overclocké." }
+if ($ocHits.Count) { Add-Alert INFO "Outils dʼoverclocking installés ($($ocHits -join ', ')) : le PC a peut-être été overclocké." }
 
 $badDev = @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { $_.ConfigManagerErrorCode -and $_.ConfigManagerErrorCode -ne 0 } |
     ForEach-Object { [pscustomobject]@{ 'Périphérique' = $_.Name; 'Code erreur' = $_.ConfigManagerErrorCode } })
@@ -1168,13 +1168,13 @@ if ($extVols.Count -eq 0) {
     Write-Host '   Aucune autre clé USB ni disque externe branché : étape sautée.' -ForegroundColor DarkGray
     Write-Host '   (Pour vérifier un disque acheté en ligne, branche-le en plus de cette clé et relance le diagnostic.)' -ForegroundColor DarkGray
 } else {
-    Write-Host '   Ce test vérifie qu’une clé ou un disque externe a vraiment la capacité annoncée (détecte les contrefaçons).'
+    Write-Host '   Ce test vérifie quʼune clé ou un disque externe a vraiment la capacité annoncée (détecte les contrefaçons).'
     foreach ($v in $extVols) { Write-Host ("   {0}:  {1,-20} annoncé {2} Go, libre {3} Go, {4}" -f $v.DriveLetter, $v.FileSystemLabel, (GB $v.Size), (GB $v.SizeRemaining), $v.FileSystem) }
     $pick = (Read-Host '   Lettre du disque à tester (ex : E), ou Entrée pour passer').Trim().TrimEnd(':').ToUpper()
     $vol = $extVols | Where-Object { "$($_.DriveLetter)".ToUpper() -eq $pick } | Select-Object -First 1
     if ($vol) {
         Write-Host '   ATTENTION : sur un disque contrefait, ce test peut abîmer les fichiers déjà présents. Copie-les ailleurs avant.' -ForegroundColor Yellow
-        $mode = Read-Host '   1 = rapide (écrit jusqu’à 100 Go, détecte la plupart des contrefaçons)   2 = complet (tout l’espace libre)   Entrée = annuler'
+        $mode = Read-Host '   1 = rapide (écrit jusquʼà 100 Go, détecte la plupart des contrefaçons)   2 = complet (tout lʼespace libre)   Entrée = annuler'
         if ($mode -match '^[12]$') {
             $capCode = @'
 using System;
@@ -1264,10 +1264,10 @@ public static class CapCheck {
                 $announced = GB $vol.Size
                 if ($badB -gt 0 -or $writeErr) {
                     $realGB = GB ($usedBefore + $(if ($null -ne $firstBad) { $firstBad } else { $written }))
-                    $verdict = "CONTREFAÇON PROBABLE : capacité réelle d’environ $realGB Go au lieu des $announced Go annoncés. Les fichiers copiés au-delà seront perdus. Demande le remboursement."
+                    $verdict = "CONTREFAÇON PROBABLE : capacité réelle dʼenviron $realGB Go au lieu des $announced Go annoncés. Les fichiers copiés au-delà seront perdus. Demande le remboursement."
                     $cls = 'r'
                 } elseif ($written -ge [double]$vol.SizeRemaining - 1GB) {
-                    $verdict = "CAPACITÉ AUTHENTIQUE : tout l’espace libre ($(GB $written) Go) a été écrit et relu sans erreur."
+                    $verdict = "CAPACITÉ AUTHENTIQUE : tout lʼespace libre ($(GB $written) Go) a été écrit et relu sans erreur."
                     $cls = 'g'
                 } else {
                     $verdict = "Aucune anomalie sur les $(GB $written) Go testés (test partiel : une contrefaçon plus grande ne serait pas détectée, faire le test complet pour être sûr)."
@@ -1284,10 +1284,10 @@ public static class CapCheck {
 # ---------------------------------------------------------------- 15
 Step 15 'Contrôles manuels (écran, bruit, ports, état physique)'
 $manual = [ordered]@{}
-$doScreen = Read-Host 'Lancer le test de l’écran en plein écran (pixels morts, taches) ? (O/N)'
+$doScreen = Read-Host 'Lancer le test de lʼécran en plein écran (pixels morts, taches) ? (O/N)'
 if ($doScreen -match '^[oOyY]') {
     Write-Host '   Plein écran : cliquez ou appuyez sur une touche pour changer de couleur, Échap pour quitter.' -ForegroundColor Yellow
-    Write-Host '   Regardez bien tout l’écran à chaque couleur (points noirs, blancs ou colorés, taches, zones plus claires).' -ForegroundColor Yellow
+    Write-Host '   Regardez bien tout lʼécran à chaque couleur (points noirs, blancs ou colorés, taches, zones plus claires).' -ForegroundColor Yellow
     Start-Sleep -Seconds 3
     try {
         Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -1385,7 +1385,7 @@ function Limits($u, $c) {
     foreach ($k in $u.T.Keys) {
         if ([double]$c[$k] / [double]$u.T[$k] -lt 0.9) { $l += "$($LABEL[$k]) $(Fmt-Val $k $c[$k]) (conseillé : $(Fmt-Val $k $u.T[$k]))" }
     }
-    if ($u.Id -eq 9 -and -not $c.Nvidia) { $l += 'carte non NVIDIA (moins compatible avec les outils d’IA)' }
+    if ($u.Id -eq 9 -and -not $c.Nvidia) { $l += 'carte non NVIDIA (moins compatible avec les outils dʼIA)' }
     $l
 }
 
@@ -1422,7 +1422,7 @@ function Get-Plan($usageList, $c) {
             $c2.G = [math]::Max($c.G, $sug.G); $c2.V = [math]::Max($c.V, $sug.V); if ($sug.Nv) { $c2.Nvidia = $true }
             $txt = "Installer une $($sug.N)"
             if ($alt) { $txt += " (ou $($alt.N))" }
-            $txt += ". Alimentation d’au moins $($sug.W) W avec les câbles PCIe nécessaires ; vérifier la longueur de carte acceptée par le boîtier."
+            $txt += ". Alimentation dʼau moins $($sug.W) W avec les câbles PCIe nécessaires ; vérifier la longueur de carte acceptée par le boîtier."
             $items += [pscustomobject]@{ Piece = 'Carte graphique'; Key = 'GPU'; D = $deficit.GPU; Short = $sug.N; Action = $txt }
         }
     }
@@ -1446,7 +1446,7 @@ function Get-Plan($usageList, $c) {
                 if (-not $pl) { $pl = $PLATFORM_NEW[$PLATFORM_NEW.Count - 1] }
                 $c2.S = [math]::Max($c.S, $pl.S); $c2.M = [math]::Max($c.M, $pl.M); $c2.R = [math]::Max($c.R, $pl.R)
                 $items += [pscustomobject]@{ Piece = 'Processeur + carte mère'; Key = 'CPU'; D = $deficit.CPU; Short = 'nouvelle plateforme'
-                    Action = "Le support actuel ($(if ($cpuInfo.Socket) { $cpuInfo.Socket } else { 'non identifié' })) n’a pas de processeur assez puissant : changer de plateforme, $($pl.N). La carte graphique et les disques se gardent." }
+                    Action = "Le support actuel ($(if ($cpuInfo.Socket) { $cpuInfo.Socket } else { 'non identifié' })) nʼa pas de processeur assez puissant : changer de plateforme, $($pl.N). La carte graphique et les disques se gardent." }
             }
         }
     }
@@ -1455,7 +1455,7 @@ function Get-Plan($usageList, $c) {
         $target = [math]::Max(16, [math]::Pow(2, [math]::Ceiling([math]::Log([math]::Max($need.R, 8)) / [math]::Log(2))))
         if ($ramSoldered) {
             $items += [pscustomobject]@{ Piece = 'Mémoire vive'; Key = 'RAM'; D = $deficit.RAM; Short = 'RAM soudée'
-                Action = "RAM $ramType soudée sur la carte mère : impossible d’en ajouter. Ce PC restera à $ramTotal Go." }
+                Action = "RAM $ramType soudée sur la carte mère : impossible dʼen ajouter. Ce PC restera à $ramTotal Go." }
         } else {
             $type = $(if ($ramType -and $ramType -notlike 'LP*') { $ramType } else { 'DDR4/DDR5 (selon la carte mère)' })
             $fmt = $(if ($isLaptop) { 'SO-DIMM (format portable)' } else { 'DIMM' })
@@ -1477,7 +1477,7 @@ function Get-Plan($usageList, $c) {
     # Stockage
     if ($need.D -gt 0) {
         if ($c.Hdd) {
-            $act = 'Remplacer le disque dur par un SSD NVMe de 1 à 2 To (ou un SSD SATA si le PC n’a pas d’emplacement M.2) et y réinstaller / cloner Windows.'
+            $act = 'Remplacer le disque dur par un SSD NVMe de 1 à 2 To (ou un SSD SATA si le PC nʼa pas dʼemplacement M.2) et y réinstaller / cloner Windows.'
             $c2.Hdd = $false; $c2.D = 88
         } elseif ($sysKind -ne 'NVMe' -and $writeMBs -and $writeMBs -lt 700) {
             $act = 'Passer à un SSD NVMe PCIe 4.0 de 2 To (si un emplacement M.2 est libre sur la carte mère) : 3 à 10 fois plus rapide.'
@@ -1536,23 +1536,23 @@ if ($gPlan) {
 }
 if ($xmpOff) { Add-Upg 1 'Réglage BIOS (gratuit)' "Activer le profil XMP/EXPO dans le BIOS pour que la RAM tourne à $($mods[0].Speed) MT/s (actuellement $($mods[0].ConfiguredClockSpeed))." 'Performance mémoire gratuite, en 2 minutes.' }
 if (($gpuOnMain -and $null -ne $gpuDrop -and $gpuDrop -ge 20) -or ($gpuMaxT -and $gpuMaxT -ge 84) -or ($gpuMaxHot -and $gpuMaxHot -ge 100)) { Add-Upg 1 'Refroidissement carte graphique' 'Dépoussiérer la carte graphique et le boîtier, vérifier que ses ventilateurs tournent ; si la carte a plus de 3 ans, faire changer sa pâte et ses pads thermiques. Améliorer la ventilation du boîtier.' 'La carte garde toute sa puissance en jeu et dure plus longtemps.' }
-if ($gpuRes -and ($gpuRes.lost -or $gpuRes.errors -gt 0)) { Add-Upg 1 'Carte graphique' 'Instabilité détectée : réinstaller proprement le pilote (DDU), retirer tout overclocking (MSI Afterburner), vérifier l’alimentation et les câbles PCIe, puis refaire le test. Si les erreurs persistent : carte défectueuse.' 'Plus de plantages ni d’artefacts en jeu.' }
+if ($gpuRes -and ($gpuRes.lost -or $gpuRes.errors -gt 0)) { Add-Upg 1 'Carte graphique' 'Instabilité détectée : réinstaller proprement le pilote (DDU), retirer tout overclocking (MSI Afterburner), vérifier lʼalimentation et les câbles PCIe, puis refaire le test. Si les erreurs persistent : carte défectueuse.' 'Plus de plantages ni dʼartefacts en jeu.' }
 if ($freqDrop -or ($maxT -and $maxT -gt 90)) { Add-Upg 1 'Refroidissement' 'Nettoyer la poussière, vérifier les ventilateurs / le ventirad et refaire la pâte thermique.' 'Le processeur ne sera plus bridé par la chaleur.' }
-if ($badTot -gt 0) { Add-Upg 1 'Processeur' 'Calculs faux sous charge : remettre le BIOS par défaut (désactiver l’overclocking), vérifier le refroidissement, puis tester à nouveau.' 'Stabilité (plantages, fichiers corrompus).' }
+if ($badTot -gt 0) { Add-Upg 1 'Processeur' 'Calculs faux sous charge : remettre le BIOS par défaut (désactiver lʼoverclocking), vérifier le refroidissement, puis tester à nouveau.' 'Stabilité (plantages, fichiers corrompus).' }
 if ($ramErrors -gt 0) { Add-Upg 1 'Mémoire vive' 'Erreurs RAM : désactiver XMP pour tester, puis tester chaque barrette seule avec MemTest86 et remplacer la barrette défectueuse.' 'Stabilité.' }
 if ($channels -eq 1 -and $slots -ge 2 -and -not $ramSoldered -and -not ($gPlan -and @($gPlan.Items | Where-Object Key -eq 'RAM').Count)) {
     $m0 = $mods[0]; Add-Upg 2 'Mémoire vive' "Ajouter une barrette identique ($($m0.Manufacturer) $((''+$m0.PartNumber).Trim()), $(GB $m0.Capacity) Go) pour passer en double canal." 'Bande passante mémoire x2 (jeux et montage plus fluides avec une puce graphique intégrée).'
 }
 if ($c -and $sizeC -gt 0 -and $freeC / $sizeC -lt 0.1) { Add-Upg 1 'Stockage' "Libérer de la place sur C: ($freeC Go libres) ou ajouter un SSD." 'Un disque plein ralentit tout le PC.' }
 foreach ($r in $nvmeRows) { if ($r.'Usure %' -ge 50) { Add-Upg 1 'Stockage' "SSD $($r.Disque) usé à $($r.'Usure %') % : sauvegarder les données et prévoir son remplacement." 'Éviter une perte de données.' } }
-if ($battHealth -and $battHealth -lt 70) { Add-Upg 2 'Batterie' "Batterie à $battHealth % : la remplacer (référence exacte selon le modèle $($cs.Model))." 'Retrouver l’autonomie d’origine.' }
+if ($battHealth -and $battHealth -lt 70) { Add-Upg 2 'Batterie' "Batterie à $battHealth % : la remplacer (référence exacte selon le modèle $($cs.Model))." 'Retrouver lʼautonomie dʼorigine.' }
 try { if (((Get-Date) - $bios.ReleaseDate).TotalDays -gt 365) { Add-Upg 2 'BIOS' "BIOS du $biosDate : le mettre à jour depuis le site du fabricant ($($bb.Manufacturer) $($bb.Product))." 'Corrections de stabilité, de sécurité et de compatibilité.' } } catch {}
 if (-not $winActive) { Add-Upg 1 'Windows' 'Windows non activé : installer une licence valide.' 'Mises à jour et personnalisation complètes.' }
 foreach ($g in $gpus) {
-    try { if (-not $g.Igpu -and $g.DriverDate -and ((Get-Date) - $g.DriverDate).TotalDays -gt 180) { Add-Upg 2 'Pilote graphique' "Pilote du $($g.DriverDate.ToString('dd/MM/yyyy')) : installer le dernier (NVIDIA App / AMD Adrenalin / Intel Arc Control)." 'Performances en jeu et compatibilité des logiciels de montage et d’IA.' } } catch {}
+    try { if (-not $g.Igpu -and $g.DriverDate -and ((Get-Date) - $g.DriverDate).TotalDays -gt 180) { Add-Upg 2 'Pilote graphique' "Pilote du $($g.DriverDate.ToString('dd/MM/yyyy')) : installer le dernier (NVIDIA App / AMD Adrenalin / Intel Arc Control)." 'Performances en jeu et compatibilité des logiciels de montage et dʼIA.' } } catch {}
 }
 if ($badDev.Count) { Add-Upg 2 'Pilotes' "Installer les pilotes manquants ($($badDev.Count) périphérique(s) en erreur) via Windows Update ou le site du fabricant." 'Tous les composants fonctionnels (Wi-Fi, audio, USB...).' }
-if ($minHits.Count -or $threatsN -gt 0) { Add-Upg 2 'Windows' 'Réinitialiser Windows (Paramètres > Système > Récupération > Réinitialiser ce PC).' 'Repartir d’un système propre.' }
+if ($minHits.Count -or $threatsN -gt 0) { Add-Upg 2 'Windows' 'Réinitialiser Windows (Paramètres > Système > Récupération > Réinitialiser ce PC).' 'Repartir dʼun système propre.' }
 if ($startupN -gt 15) { Add-Upg 3 'Windows' 'Désactiver les programmes inutiles au démarrage (Gestionnaire des tâches > Applications de démarrage).' 'Démarrage plus rapide.' }
 
 # =====================================================================
@@ -1609,7 +1609,7 @@ $h = "<table><tr><th>Composant</th><th>Modèle</th><th style='min-width:150px'>N
 foreach ($r in $compRows) { $h += "<tr><td><b>$(Enc $r[0])</b></td><td>$(Enc $r[1])</td><td>$(Bar $r[2])</td><td>$(Enc $r[3])</td><td class='small'>$(Enc $r[4])</td></tr>" }
 $compHtml = $h + '</table>'
 
-$h = "<table><tr><th>Usage</th><th style='min-width:150px'>Note</th><th>Verdict</th><th>Pour l’améliorer</th></tr>"
+$h = "<table><tr><th>Usage</th><th style='min-width:150px'>Note</th><th>Verdict</th><th>Pour lʼaméliorer</th></tr>"
 foreach ($ur in $usageRes) {
     $todo = ''
     if ($ur.Score -lt 70) {
@@ -1685,7 +1685,7 @@ $alertHtml
 $($sections -join "`n")
 </details>
 <h2>À compléter à la main</h2><ul>
-$(if (-not ($gpuRes -and $gpuRes.ok)) { '<li>Carte graphique : le test intégré n’a pas pu se faire ; lancer OCCT (dossier OCCT), test « 3D Adaptive » 10 min, vérifier 0 erreur et GPU &lt; 85 °C.</li>' } else { '<li>Carte graphique : pour un test de stabilité plus long (30 min), OCCT « 3D Adaptive ».</li>' })
+$(if (-not ($gpuRes -and $gpuRes.ok)) { '<li>Carte graphique : le test intégré nʼa pas pu se faire ; lancer OCCT (dossier OCCT), test « 3D Adaptive » 10 min, vérifier 0 erreur et GPU &lt; 85 °C.</li>' } else { '<li>Carte graphique : pour un test de stabilité plus long (30 min), OCCT « 3D Adaptive ».</li>' })
 <li>RAM : pour un test complet, MemTest86 sur clé USB (1 à 2 h).</li>
 <li>Ports USB, Wi-Fi / Ethernet, prises audio.</li></ul>
 <p class="small">Les indices de performance sont des ordres de grandeur issus de moyennes publiques (jeu 1440p, rendu, encodage) et du benchmark intégré. $(if ($lhmCpuOk) { 'Températures lues par LibreHardwareMonitor sur les capteurs du processeur et de la carte graphique.' } else { 'Sans LibreHardwareMonitor, la température du processeur vient du capteur ACPI (indicatif).' }) La puissance mesurée de la carte graphique (G ops/s) sert de référence pour comparer des PC entre eux.</p>
