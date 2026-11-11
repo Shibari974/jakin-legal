@@ -94,6 +94,7 @@ pre.raw { font-family: var(--font-data); font-size: 12px; white-space: pre-wrap;
       <button type="button" id="ty-pc" data-ty="pc">PC</button>
     </div>
     <div class="specs" id="specs"></div>
+    <div class="verdict g" id="pcNote" hidden>Sur PC, le diagnostic de référence reste le programme Diagnostic-PC (Windows) : santé des disques, températures, mémoire vidéo et pièces compatibles à acheter. Lance-le en premier depuis la clé USB (LANCER-DIAGNOSTIC.bat). Les mesures ci-dessous sont un complément rapide, facultatif.</div>
   </section>
 
   <section class="card" aria-labelledby="t-run">
@@ -174,6 +175,7 @@ function detect() {
 const TYPE_LABEL = { phone: 'Téléphone', tablet: 'Tablette', pc: 'PC' };
 function renderSpecs() {
   for (const t of ['phone', 'tablet', 'pc']) $('ty-' + t).setAttribute('aria-pressed', String(S.type === t));
+  $('pcNote').hidden = S.type !== 'pc';
   $('devGuess').textContent = 'Détection automatique : ' + TYPE_LABEL[S.autoType] + ' ' + S.os;
   const w = Math.round(screen.width * S.dpr), h = Math.round(screen.height * S.dpr);
   const items = [
