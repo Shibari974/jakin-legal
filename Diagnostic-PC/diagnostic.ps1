@@ -16,7 +16,7 @@
 param([switch]$Reprise)
 $ErrorActionPreference = 'Continue'
 $Error.Clear()
-$VERSION = '3.1'
+$VERSION = '3.2'
 try { $Host.UI.RawUI.WindowTitle = 'Diagnostic PC' } catch {}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportDir = Join-Path $root 'Rapports'
@@ -227,8 +227,10 @@ function Get-LhmAuto([string]$dir) {
         Write-Host '   Téléchargement de LibreHardwareMonitor (températures précises, une seule fois)...' -ForegroundColor DarkGray
         $hdr = @{ 'User-Agent' = 'DiagnosticPC' }
         $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest' -Headers $hdr -TimeoutSec 20
-        $asset = @($rel.assets) | Where-Object { $_.name -match '\.zip$' -and $_.name -match 'net4' } | Select-Object -First 1
-        if (-not $asset) { $asset = @($rel.assets) | Where-Object { $_.name -match '\.zip$' -and $_.name -notmatch 'net[5-9]|linux|mac|osx' } | Select-Object -First 1 }
+        # version .NET Framework (la seule utilisable ici) : « LibreHardwareMonitor.zip » ou un nom contenant net4x
+        $asset = @($rel.assets) | Where-Object { $_.name -eq 'LibreHardwareMonitor.zip' } | Select-Object -First 1
+        if (-not $asset) { $asset = @($rel.assets) | Where-Object { $_.name -match '\.zip$' -and $_.name -match 'net4' } | Select-Object -First 1 }
+        if (-not $asset) { $asset = @($rel.assets) | Where-Object { $_.name -match '\.zip$' -and $_.name -notmatch 'net[\s\._-]?([5-9]|1\d)|core|linux|mac|osx' } | Select-Object -First 1 }
         if (-not $asset) { return $false }
         $zip = Join-Path $env:TEMP 'diag_lhm.zip'
         Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -UseBasicParsing -TimeoutSec 180 -Headers $hdr
