@@ -1,4 +1,4 @@
-﻿DIAGNOSTIC PC COMPLET (v2.6) - MODE D'EMPLOI
+﻿DIAGNOSTIC PC COMPLET (v2.7) - MODE D'EMPLOI
 ============================================
 
 Un seul outil, entièrement automatique, qui remplace plusieurs petits logiciels
@@ -7,11 +7,12 @@ températures, réseau, son, USB, écran...) et qui dit CE QUE LE PC EST CAPABLE
 PC de bureau et portables, Windows 10 / 11.
 
 1) PRÉPARATION (une seule fois)
-   - Copie tout le dossier "Diagnostic-PC" sur une clé USB.
-   - Conseillé : LibreHardwareMonitor (gratuit) pour les VRAIES températures :
-       * télécharge le .zip sur github.com/LibreHardwareMonitor/LibreHardwareMonitor (Releases)
-       * décompresse TOUT son contenu dans le dossier "LibreHardwareMonitor"
-   - Facultatif : CrystalDiskInfo (version Portable) dans le dossier "CrystalDiskInfo".
+   - Copie tout le dossier "Diagnostic-PC" sur une clé USB. C'est tout : aucun logiciel à installer.
+   - Au premier lancement (PC connecté à Internet), l'outil télécharge tout seul
+     LibreHardwareMonitor (vraies températures, pompe, ventilateurs) depuis sa page officielle
+     et le garde sur la clé pour les fois suivantes.
+   - Sur Windows récent, la température exacte du PROCESSEUR demande en plus le pilote PawnIO
+     (pawnio.eu) ; sans lui, l'outil marche quand même (température approximative).
 
 2) SUR LE PC À TESTER
    - Portable : chargeur branché, posé sur une table. Volume vers 50 %, pièce calme.

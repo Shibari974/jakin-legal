@@ -15,7 +15,7 @@
 # =====================================================================
 $ErrorActionPreference = 'Continue'
 $Error.Clear()
-$VERSION = '2.6'
+$VERSION = '2.7'
 try { $Host.UI.RawUI.WindowTitle = 'Diagnostic PC' } catch {}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportDir = Join-Path $root 'Rapports'
@@ -207,11 +207,34 @@ function Get-Level([double]$s) {
 #  Capteurs : LibreHardwareMonitor (facultatif, vraies températures)
 #  et nvidia-smi (installé avec le pilote NVIDIA)
 # ---------------------------------------------------------------------
-$lhm = $null; $lhmCpuOk = $false
+$lhm = $null; $lhmCpuOk = $false; $lhmState = 'absent'
+# Téléchargement automatique de LibreHardwareMonitor (une seule fois, gardé sur la clé)
+function Get-LhmAuto([string]$dir) {
+    $oldPP = $ProgressPreference
+    try {
+        $ProgressPreference = 'SilentlyContinue'
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Write-Host '   Téléchargement de LibreHardwareMonitor (températures précises, une seule fois)...' -ForegroundColor DarkGray
+        $hdr = @{ 'User-Agent' = 'DiagnosticPC' }
+        $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest' -Headers $hdr -TimeoutSec 20
+        $asset = @($rel.assets) | Where-Object { $_.name -match '\.zip$' -and $_.name -match 'net4' } | Select-Object -First 1
+        if (-not $asset) { $asset = @($rel.assets) | Where-Object { $_.name -match '\.zip$' -and $_.name -notmatch 'net[5-9]|linux|mac|osx' } | Select-Object -First 1 }
+        if (-not $asset) { return $false }
+        $zip = Join-Path $env:TEMP 'diag_lhm.zip'
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -UseBasicParsing -TimeoutSec 180 -Headers $hdr
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        Expand-Archive -Path $zip -DestinationPath $dir -Force
+        Remove-Item $zip -Force -ErrorAction SilentlyContinue
+        Write-Host "   LibreHardwareMonitor $($rel.tag_name) installé dans le dossier de la clé." -ForegroundColor DarkGray
+        return $true
+    } catch { Write-Host "   Téléchargement impossible (pas dʼInternet ?) : températures approximatives." -ForegroundColor DarkGray; return $false }
+    finally { $ProgressPreference = $oldPP }
+}
 function Init-Lhm {
     $dir = Join-Path $root 'LibreHardwareMonitor'
     $dll = Get-ChildItem $dir -Recurse -Filter 'LibreHardwareMonitorLib.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $dll) { Write-Host '   (LibreHardwareMonitor absent : températures approximatives)' -ForegroundColor DarkGray; return }
+    if (-not $dll -and (Get-LhmAuto $dir)) { $dll = Get-ChildItem $dir -Recurse -Filter 'LibreHardwareMonitorLib.dll' -ErrorAction SilentlyContinue | Select-Object -First 1 }
+    if (-not $dll) { return }
     try {
         Get-ChildItem $dll.DirectoryName -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
         Add-Type -Path $dll.FullName -ErrorAction Stop
@@ -221,6 +244,7 @@ function Init-Lhm {
         $script:lhm = $cp
         $t0 = Read-Lhm
         $script:lhmCpuOk = ($null -ne $t0.Cpu)
+        $script:lhmState = $(if ($script:lhmCpuOk) { 'ok' } else { 'nocpu' })
         Write-Host "   LibreHardwareMonitor chargé (temp. processeur : $(if ($t0.Cpu) { "$([int]$t0.Cpu) C" } else { 'non lisible' }), carte graphique : $(if ($t0.Gpu) { "$([int]$t0.Gpu) C" } else { 'non lisible' }))." -ForegroundColor DarkGray
     } catch { Write-Host "   LibreHardwareMonitor nʼa pas pu démarrer : $($_.Exception.Message)" -ForegroundColor DarkGray }
 }
@@ -2283,7 +2307,7 @@ $(if ($errLog.Count) { "<h3>Journal technique (pour Claude)</h3><pre>$(Enc ($err
 $(if ($null -eq $usbPorts) { '<li>Ports USB : non testés. Relance le diagnostic avec une souris ou un téléphone pour les tester automatiquement.</li>' })
 $(if ($mdScheduled) { '<li>RAM : test complet de Windows programmé au prochain redémarrage ; relance ce diagnostic ensuite pour lire son résultat.</li>' })
 </ul>
-<p class="small">Les indices de performance sont des ordres de grandeur issus de moyennes publiques (jeu 1440p, rendu, encodage) et du benchmark intégré. $(if ($lhmCpuOk) { 'Températures lues par LibreHardwareMonitor sur les capteurs du processeur et de la carte graphique.' } else { 'Sans LibreHardwareMonitor, la température du processeur vient du capteur ACPI (indicatif).' }) La puissance mesurée de la carte graphique (G ops/s) sert de référence pour comparer des PC entre eux.</p>
+<p class="small">Les indices de performance sont des ordres de grandeur issus de moyennes publiques (jeu 1440p, rendu, encodage) et du benchmark intégré. $(if ($lhmCpuOk) { 'Températures lues par LibreHardwareMonitor sur les capteurs du processeur et de la carte graphique.' } elseif ($lhmState -eq 'nocpu') { 'LibreHardwareMonitor est chargé mais ne lit pas la température du processeur : sur Windows récent, il lui faut le pilote PawnIO (pawnio.eu). La température vient alors du capteur ACPI (indicatif).' } else { 'LibreHardwareMonitor nʼa pas pu être téléchargé (pas dʼInternet) : température du processeur approximative.' }) La puissance mesurée de la carte graphique (G ops/s) sert de référence pour comparer des PC entre eux.</p>
 </body></html>
 "@
 $html | Out-File -FilePath $reportPath -Encoding UTF8
