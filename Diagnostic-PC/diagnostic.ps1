@@ -1,4 +1,4 @@
-﻿# =====================================================================
+﻿﻿# =====================================================================
 #  DIAGNOSTIC PC COMPLET - v2.1
 #  Remplace plusieurs petits logiciels (infos système, SMART, benchmark,
 #  test RAM, test de charge...) et dit ce que le PC est capable de faire :
@@ -16,7 +16,7 @@
 param([switch]$Reprise)
 $ErrorActionPreference = 'Continue'
 $Error.Clear()
-$VERSION = '3.2'
+$VERSION = '3.3'
 try { $Host.UI.RawUI.WindowTitle = 'Diagnostic PC' } catch {}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportDir = Join-Path $root 'Rapports'
@@ -273,11 +273,13 @@ function Install-PawnIO {
 function Init-Lhm {
     $dir = Join-Path $root 'LibreHardwareMonitor'
     $dll = Get-ChildItem $dir -Recurse -Filter 'LibreHardwareMonitorLib.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $dll) { $dll = Get-ChildItem $root -Filter 'LibreHardwareMonitorLib.dll' -ErrorAction SilentlyContinue | Select-Object -First 1 }   # fichiers posés à la racine
     if (-not $dll -and (Get-LhmAuto $dir)) { $dll = Get-ChildItem $dir -Recurse -Filter 'LibreHardwareMonitorLib.dll' -ErrorAction SilentlyContinue | Select-Object -First 1 }
     if (-not $dll) { return }
     try {
         Get-ChildItem $dll.DirectoryName -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
-        if (-not ('LibreHardwareMonitor.Hardware.Computer' -as [type])) { Add-Type -Path $dll.FullName -ErrorAction Stop }
+        # LoadFrom charge la bibliothèque et ses dépendances du même dossier sans énumérer tous ses types
+        if (-not ('LibreHardwareMonitor.Hardware.Computer' -as [type])) { [void][System.Reflection.Assembly]::LoadFrom($dll.FullName) }
         $cp = New-Object LibreHardwareMonitor.Hardware.Computer
         foreach ($p in 'IsCpuEnabled', 'IsGpuEnabled', 'IsMotherboardEnabled', 'IsControllerEnabled') { try { $cp.$p = $true } catch {} }
         $cp.Open()
@@ -1681,16 +1683,19 @@ $dnsOk = $false; try { $null = [Net.Dns]::GetHostAddresses('www.microsoft.com');
 $dlMbps = $null
 if ($null -ne $ping -or $dnsOk) {
     Write-Host '   Mesure du débit Internet (12 s max)...' -ForegroundColor DarkGray
-    try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        $req = [Net.HttpWebRequest]::Create('https://speed.cloudflare.com/__down?bytes=100000000')
-        $req.Timeout = 15000; $req.ReadWriteTimeout = 15000; $req.UserAgent = 'DiagnosticPC'
-        $resp = $req.GetResponse(); $st = $resp.GetResponseStream()
-        $nbuf = New-Object byte[] 131072; $tot = 0; $sw = [Diagnostics.Stopwatch]::StartNew()
-        while ($sw.Elapsed.TotalSeconds -lt 12) { $n = $st.Read($nbuf, 0, $nbuf.Length); if ($n -le 0) { break }; $tot += $n }
-        $sw.Stop(); $resp.Close()
-        if ($sw.Elapsed.TotalSeconds -gt 0.5) { $dlMbps = [math]::Round($tot * 8 / 1e6 / $sw.Elapsed.TotalSeconds, 1) }
-    } catch {}
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    foreach ($testUrl in 'https://proof.ovh.net/files/100Mb.dat', 'https://speed.cloudflare.com/__down?bytes=100000000') {
+        try {
+            $req = [Net.HttpWebRequest]::Create($testUrl)
+            $req.Timeout = 15000; $req.ReadWriteTimeout = 15000
+            $req.UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) DiagnosticPC'
+            $resp = $req.GetResponse(); $st = $resp.GetResponseStream()
+            $nbuf = New-Object byte[] 131072; $tot = 0; $sw = [Diagnostics.Stopwatch]::StartNew()
+            while ($sw.Elapsed.TotalSeconds -lt 12) { $n = $st.Read($nbuf, 0, $nbuf.Length); if ($n -le 0) { break }; $tot += $n }
+            $sw.Stop(); $resp.Close()
+            if ($sw.Elapsed.TotalSeconds -gt 0.5 -and $tot -gt 1MB) { $dlMbps = [math]::Round($tot * 8 / 1e6 / $sw.Elapsed.TotalSeconds, 1); break }
+        } catch {}
+    }
 }
 Add-Table 'Réseau et Internet' ([ordered]@{
     'Carte Wi-Fi'       = $(if ($wifiAd) { "$($wifiAd.InterfaceDescription) - $($wifiAd.Status)$(if ($wifiRadio) { " - norme $wifiRadio" })" } else { 'aucune' })
@@ -1709,7 +1714,7 @@ if ($ethAd -and "$($ethAd.Status)" -eq 'Up' -and "$($ethAd.LinkSpeed)" -match '^
 # ---------------------------------------------------------------- 15
 Step 15 'Son, micro, caméra et USB (tests automatiques)'
 # Son : le PC joue un son de 1000 Hz et lʼécoute avec son propre micro
-$sndRes = 'non testé'; $sndCls = ''
+$sndRes = 'non testé'; $sndCls = ''; $askBeep = $false
 if ($audioOk) {
     Write-Host '   Test du son : un bip va retentir pendant 3 secondes.' -ForegroundColor DarkGray
     try {
@@ -1724,12 +1729,14 @@ if ($audioOk) {
         $gain = $(if ($t0 -gt 0) { [math]::Round(20 * [math]::Log10([math]::Max($t1, 1e-12) / $t0), 1) } else { 99 })
         if ($micDb -le -90) { $sndRes = 'micro muet ou désactivé (son des haut-parleurs non vérifiable)'; $sndCls = 'o'; Add-Alert ORANGE 'Micro muet, désactivé ou absent : vérifier les paramètres de confidentialité du micro.' 3 }
         elseif ($gain -ge 12) { $sndRes = "haut-parleurs et micro fonctionnent (bip capté à +$gain dB)"; $sndCls = 'g'; Add-Alert OK 'Haut-parleurs et micro : fonctionnent (test automatique).' }
-        else { $sndRes = "bip non capté (+$gain dB) : volume à zéro, casque branché ou haut-parleurs défectueux"; $sndCls = 'o'; Add-Alert ORANGE 'Le micro nʼa pas entendu le bip : volume coupé, casque branché, ou haut-parleurs défectueux.' 5 }
-    } catch { $sndRes = "test impossible : $($_.Exception.Message)" }
-} else { $sndRes = 'aucun micro utilisable : haut-parleurs non testables automatiquement'; Add-Alert INFO 'Pas de micro utilisable : le son nʼa pas pu être testé automatiquement.' }
+        else { $sndRes = 'bip non capté par le micro (annulation dʼécho du micro, volume coupé ou haut-parleurs défectueux) : vérification à lʼoreille à la fin'; $sndCls = 'o'; $askBeep = $true }
+    } catch { $sndRes = "test automatique impossible : vérification à lʼoreille à la fin"; $askBeep = $true }
+} else { $sndRes = 'aucun micro utilisable : vérification à lʼoreille à la fin'; $askBeep = $true }
 # Bruit des ventilateurs (mesuré pendant le test de charge du processeur)
 $noiseTxt = 'non mesuré'
-if ($null -ne $noiseIdle -and $null -ne $noiseLoad) {
+if ($null -ne $noiseLoad -and ($noiseLoad -le -90 -or ($null -ne $noiseIdle -and $noiseLoad -lt $noiseIdle - 10))) {
+    $noiseTxt = "mesure non fiable (micro coupé ou filtré pendant la charge : repos $noiseIdle dB, charge $noiseLoad dB)"
+} elseif ($null -ne $noiseIdle -and $null -ne $noiseLoad) {
     $noiseDiff = [math]::Round($noiseLoad - $noiseIdle, 1)
     $noiseTxt = "repos $noiseIdle dB, sous charge $noiseLoad dB ($(if ($noiseDiff -ge 0) { '+' })$noiseDiff dB)"
     if ($noiseDiff -ge 15) { Add-Alert ORANGE "Ventilateurs très bruyants sous charge (+$noiseDiff dB au micro) : poussière ou ventilateur fatigué." 5 }
@@ -1980,8 +1987,16 @@ if ($doUsb -match '^[oOyY]') {
     $usbList = { @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like 'USB\VID*' -and $_.InstanceId -notmatch '&MI_' }) }
     $known = @{}; foreach ($d in (& $usbList)) { $known[$d.InstanceId] = 1 }
     $ports = @{}
+    $keyOk = $true; try { $null = [Console]::KeyAvailable } catch { $keyOk = $false }
+    if (-not $keyOk) { Write-Host '   (Ici la touche Entrée ne peut pas être détectée : le test dure 60 secondes.)' -ForegroundColor Yellow }
+    $usbT0 = Get-Date
     while ($true) {
-        try { if ([Console]::KeyAvailable -and [Console]::ReadKey($true).Key -eq 'Enter') { break } } catch { break }
+        if ($keyOk) { try { if ([Console]::KeyAvailable -and [Console]::ReadKey($true).Key -eq 'Enter') { break } } catch { $keyOk = $false; $usbT0 = Get-Date } }
+        else {
+            $left = 60 - [int]((Get-Date) - $usbT0).TotalSeconds
+            if ($left -le 0) { break }
+            Write-Progress -Activity 'Test des ports USB' -Status "Branche lʼappareil sur chaque port : encore $left s" -PercentComplete (100 * (60 - $left) / 60)
+        }
         Start-Sleep -Milliseconds 600
         $now = & $usbList
         $ids = @{}; foreach ($d in $now) { $ids[$d.InstanceId] = 1 }
@@ -1996,12 +2011,20 @@ if ($doUsb -match '^[oOyY]') {
         }
         foreach ($k in @($known.Keys)) { if (-not $ids.ContainsKey($k)) { $known.Remove($k) } }
     }
+    Write-Progress -Activity 'Test des ports USB' -Completed
     $usbPorts = $ports.Count
     $manual['Ports USB qui fonctionnent (détection automatique)'] = "$usbPorts port(s)"
     if ($usbPorts -gt 0) { Add-Alert OK "$usbPorts port(s) USB testé(s) : fonctionnent." }
     Write-Host "   $usbPorts port(s) USB fonctionnel(s). Si un port nʼa rien affiché, il est probablement défectueux." -ForegroundColor Cyan
 }
 $mdScheduled = $false
+if ($askBeep) {
+    Write-Host '   Vérification du son : écoute bien, un bip va retentir.' -ForegroundColor Yellow
+    try { $sp2 = New-Object Media.SoundPlayer (New-Object IO.MemoryStream (, ([AudioTest]::ToneWav(1000, 2000)))); $sp2.PlaySync(); $sp2.Dispose() } catch { [console]::beep(1000, 1500) }
+    $hb = Read-Host '   As-tu entendu le bip clairement, sans grésillement ? (O/N)'
+    if ($hb -match '^[oOyY]') { $sndRes = 'haut-parleurs fonctionnent (vérifié à lʼoreille)'; $sndCls = 'g'; Add-Alert OK 'Haut-parleurs : fonctionnent (vérifié à lʼoreille).' }
+    elseif ($hb -match '^[nN]') { $sndRes = 'haut-parleurs muets ou défectueux (bip non entendu)'; $sndCls = 'r'; Add-Alert ORANGE 'Haut-parleurs : bip non entendu (volume coupé, casque branché ou haut-parleurs défectueux).' 5 }
+}
 $questions = [ordered]@{
     'État extérieur correct (pas de choc ni fissure, charnières solides)' = 'État physique douteux signalé.'
 }
@@ -2362,7 +2385,7 @@ foreach ($ur in $usageRes) {
     $col = @{ g = 'Green'; o = 'Yellow'; r = 'Red' }[$ur.Lv.Cls]
     $star = $(if ($ur.Sel) { '*' } else { ' ' })
     $line = "{0} {1,-45} {2,3}/100  {3}" -f $star, $ur.U.Nom, $ur.Score, $ur.Lv.Txt
-    if ($null -ne $ur.After -and $ur.After -gt $ur.Score) { $line += "  (-> $($ur.After) avec : $((@($ur.Plan.Items | ForEach-Object { $_.Short })) -join ' + '))" }
+    if ($null -ne $ur.After -and $ur.After -gt $ur.Score) { $line += "  (-> $($ur.After) avec : $((@($ur.Plan.Items | Where-Object { -not $_.Fixed } | ForEach-Object { $_.Short })) -join ' + '))" }
     Write-Host $line -ForegroundColor $col
 }
 Write-Host ''
@@ -2412,7 +2435,7 @@ foreach ($ur in $usageRes) {
     if ($ur.Score -lt 70) {
         if ($ur.Lim.Count) { $todo = "<div class='small'>Limité par : $(Enc ($ur.Lim -join ' ; '))</div>" }
         if ($ur.Plan -and $ur.Plan.Items.Count) {
-            $todo += '<ul>' + (($ur.Plan.Items | ForEach-Object { "<li>$(Enc $_.Short)</li>" }) -join '') + '</ul>'
+            $todo += '<ul>' + (($ur.Plan.Items | ForEach-Object { if ($_.Fixed) { "<li class='small'>$(Enc $_.Short)</li>" } else { "<li>$(Enc $_.Short)</li>" } }) -join '') + '</ul>'
             if ($ur.After -gt $ur.Score) { $todo += "<b>Note estimée après : $($ur.After)/100 ($((Get-Level $ur.After).Txt))</b>" }
             if ($ur.After -lt 50) { $todo += "<div class='small'>Même amélioré, ce PC restera insuffisant pour cet usage : voir « Faut-il changer de PC ? ».</div>" }
         }
@@ -2523,12 +2546,12 @@ $sum += ''; $sum += 'USAGES :'
 foreach ($ur in $usageRes) {
     $line = " $(if ($ur.Sel) { '*' } else { '-' }) $($ur.U.Nom) : $($ur.Score)/100 ($($ur.Lv.Txt))"
     if ($ur.Lim.Count) { $line += " | limité par : $($ur.Lim -join ' ; ')" }
-    if ($null -ne $ur.After -and $ur.After -gt $ur.Score) { $line += " | avec $((@($ur.Plan.Items | ForEach-Object { $_.Short })) -join ' + ') : $($ur.After)/100" }
+    if ($null -ne $ur.After -and $ur.After -gt $ur.Score) { $line += " | avec $((@($ur.Plan.Items | Where-Object { -not $_.Fixed } | ForEach-Object { $_.Short })) -join ' + ') : $($ur.After)/100" }
     $sum += $line
 }
 $sum += ''; $sum += "TEST CARTE GRAPHIQUE : $(if ($gpuRes) { "$($gpuRes.renderer) | $gpuScore G ops/s | chute $gpuDrop % | erreurs $($gpuRes.errors)/$($gpuRes.checks) | temp. max $gpuMaxT C | utilisation $([int]$gpuUtil) %" } else { 'non réalisé' })"
 $sum += "TEST PROCESSEUR : 1 cœur $mono pts | multi $multi pts | gain x$scaling | temp. max $maxT C | calculs faux $badTot"
-$sum += "RÉSEAU : Wi-Fi $(if ($wifiAd) { "$($wifiAd.Status), signal $wifiSignal %" } else { 'absent' }) | ping $ping ms | débit $dlMbps Mbit/s"
+$sum += "RÉSEAU : Wi-Fi $(if ($wifiAd) { "$($wifiAd.Status), signal $(if ($null -ne $wifiSignal) { "$wifiSignal %" } else { 'non lisible' })" } else { 'absent' }) | ping $(if ($null -ne $ping) { "$ping ms" } else { '?' }) | débit $(if ($dlMbps) { "$dlMbps Mbit/s" } else { 'non mesuré' })"
 $sum += "SON : $sndRes | bruit : $noiseTxt | webcam : $($cams.Count) | USB : $(if ($null -ne $usbPorts) { "$usbPorts port(s) OK" } else { 'ports non testés' }), clé $keySpeed Mo/s"
 $sum += "RAM : test direct $ramTested Go / $ramErrors erreur(s) | test Windows : $(if ($mdRes) { if ($mdRes.Bad) { 'ERREURS' } else { 'OK' } } else { 'jamais lancé' })$(if ($mdScheduled) { ' (programmé)' })"
 if ($extRes) { $sum += "DISQUE EXTERNE $($extRes.Letter): : $($extRes.Verdict) (écriture $($extRes.Write) Mo/s, lecture $($extRes.Read) Mo/s)" }
