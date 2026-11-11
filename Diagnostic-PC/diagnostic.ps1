@@ -14,7 +14,8 @@
 #  puis supprimé pour mesurer la vitesse du disque.
 # =====================================================================
 $ErrorActionPreference = 'Continue'
-$VERSION = '2.2'
+$Error.Clear()
+$VERSION = '2.3'
 try { $Host.UI.RawUI.WindowTitle = 'Diagnostic PC' } catch {}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportDir = Join-Path $root 'Rapports'
@@ -461,7 +462,7 @@ if ($mods.Count) {
     elseif ([int]$mods[0].Speed -ge 2133) { $ramType = 'DDR4' }
     elseif ([int]$mods[0].Speed -gt 0) { $ramType = 'DDR3' }
 }
-$ramSoldered = ($ramType -like 'LP*')
+$ramSoldered = ($ramType -like 'LP*') -or ($isLaptop -and $mods.Count -gt 0 -and @($mods | Where-Object { @(8, 12) -contains [int]$_.FormFactor }).Count -eq 0)
 $ramRows = foreach ($m in $mods) {
     [pscustomobject]@{
         'Emplacement'    = $m.DeviceLocator
@@ -544,6 +545,7 @@ $sysDiskNum = $null; try { $sysDiskNum = [int](Get-Partition -DriveLetter C -Err
 $keyDiskNum = $null; try { $keyDiskNum = [int](Get-Partition -DriveLetter $root.Substring(0, 1) -ErrorAction Stop | Select-Object -First 1).DiskNumber } catch {}
 $pdisks = @(Get-PhysicalDisk | Where-Object { "$($_.BusType)" -ne 'USB' -and ($null -eq $keyDiskNum -or [int]$_.DeviceId -ne $keyDiskNum) })
 function Disk-Kind($d) {
+    if (@('SD', 'MMC') -contains "$($d.BusType)") { return 'eMMC (soudée, lente)' }
     if ("$($d.BusType)" -eq 'NVMe') { return 'NVMe' }
     if ("$($d.MediaType)" -eq 'SSD') { return 'SSD SATA' }
     if ("$($d.MediaType)" -eq 'HDD') { return 'Disque dur (HDD)' }
@@ -1412,7 +1414,7 @@ function Get-Plan($usageList, $c) {
     # Carte graphique
     if ($need.G -gt 0 -or $need.V -gt 0) {
         if ($isLaptop) {
-            $items += [pscustomobject]@{ Piece = 'Carte graphique'; Key = 'GPU'; D = $deficit.GPU; Short = 'GPU non remplaçable (portable)'
+            $items += [pscustomobject]@{ Fixed = $true; Piece = 'Carte graphique'; Key = 'GPU'; D = $deficit.GPU; Short = 'GPU non remplaçable (portable)'
                 Action = 'PC portable : la carte graphique est soudée et ne peut pas être changée. Seule solution : un boîtier eGPU (Thunderbolt / OCuLink), coûteux, ou un autre PC.' }
         } else {
             $ng = [math]::Max($need.G, $c.G); $nv = [math]::Max($need.V, $c.V)
@@ -1430,7 +1432,7 @@ function Get-Plan($usageList, $c) {
     if ($need.S -gt 0 -or $need.M -gt 0) {
         $ns = [math]::Max($need.S, $c.S) * 0.95; $nm = [math]::Max($need.M, $c.M) * 0.95
         if ($cpuInfo.Mobile -or $isLaptop) {
-            $items += [pscustomobject]@{ Piece = 'Processeur'; Key = 'CPU'; D = $deficit.CPU; Short = 'CPU non remplaçable (portable)'
+            $items += [pscustomobject]@{ Fixed = $true; Piece = 'Processeur'; Key = 'CPU'; D = $deficit.CPU; Short = 'CPU non remplaçable (portable)'
                 Action = 'PC portable : le processeur est soudé. Pour plus de puissance de calcul, il faut un autre PC.' }
         } else {
             $sug = $null
@@ -1454,11 +1456,11 @@ function Get-Plan($usageList, $c) {
     if ($need.R -gt 0 -and $c2.R -lt $need.R) {
         $target = [math]::Max(16, [math]::Pow(2, [math]::Ceiling([math]::Log([math]::Max($need.R, 8)) / [math]::Log(2))))
         if ($ramSoldered) {
-            $items += [pscustomobject]@{ Piece = 'Mémoire vive'; Key = 'RAM'; D = $deficit.RAM; Short = 'RAM soudée'
+            $items += [pscustomobject]@{ Fixed = $true; Piece = 'Mémoire vive'; Key = 'RAM'; D = $deficit.RAM; Short = 'RAM soudée'
                 Action = "RAM $ramType soudée sur la carte mère : impossible dʼen ajouter. Ce PC restera à $ramTotal Go." }
         } else {
             $type = $(if ($ramType -and $ramType -notlike 'LP*') { $ramType } else { 'DDR4/DDR5 (selon la carte mère)' })
-            $fmt = $(if ($isLaptop) { 'SO-DIMM (format portable)' } else { 'DIMM' })
+            $fmt = $(if ($isLaptop) { 'SO-DIMM (format portable) - vérifier dʼabord sur la fiche technique quʼun emplacement est libre et la quantité maximale acceptée' } else { 'DIMM' })
             $m0 = $mods | Select-Object -First 1
             $size0 = 0; if ($m0) { $size0 = GB $m0.Capacity }
             $free = [int]$slots - $mods.Count
@@ -1479,6 +1481,9 @@ function Get-Plan($usageList, $c) {
         if ($c.Hdd) {
             $act = 'Remplacer le disque dur par un SSD NVMe de 1 à 2 To (ou un SSD SATA si le PC nʼa pas dʼemplacement M.2) et y réinstaller / cloner Windows.'
             $c2.Hdd = $false; $c2.D = 88
+        } elseif ($sysKind -like 'eMMC*') {
+            $act = 'Stockage eMMC soudé (lent et petit) : vérifier sur la fiche technique du modèle sʼil existe un emplacement M.2 libre pour y ajouter un SSD NVMe et y installer Windows ; sinon, un SSD externe USB-C pour les fichiers.'
+            $c2.D = 88
         } elseif ($sysKind -ne 'NVMe' -and $writeMBs -and $writeMBs -lt 700) {
             $act = 'Passer à un SSD NVMe PCIe 4.0 de 2 To (si un emplacement M.2 est libre sur la carte mère) : 3 à 10 fois plus rapide.'
             $c2.D = 92
@@ -1506,14 +1511,62 @@ $usageRes = foreach ($u in $USAGES) {
 # Plan global : usages choisis (ou, à défaut, les usages "Correct" à portée de main)
 $targets = @($usageRes | Where-Object { $_.Sel -and $_.Score -lt 70 } | ForEach-Object { $_.U })
 if ($selected.Count -eq 0) { $targets = @($usageRes | Where-Object { $_.Score -ge 50 -and $_.Score -lt 70 } | ForEach-Object { $_.U }) }
-$gPlan = $null
+$gPlan = $null; $fixedItems = @()
 if ($targets.Count) { $gPlan = Get-Plan $targets $comp }
+
+# ---------------------------------------------------------------------
+#  Faut-il changer de PC ? (si même amélioré, le PC reste insuffisant)
+# ---------------------------------------------------------------------
+$LAPTOP_GPU = @(
+    [pscustomobject]@{ N = 'RTX 5050 Laptop';    G = 15; V = 8 }
+    [pscustomobject]@{ N = 'RTX 5060 Laptop';    G = 19; V = 8 }
+    [pscustomobject]@{ N = 'RTX 5070 Laptop';    G = 23; V = 8 }
+    [pscustomobject]@{ N = 'RTX 5070 Ti Laptop'; G = 30; V = 12 }
+    [pscustomobject]@{ N = 'RTX 5080 Laptop';    G = 40; V = 16 }
+    [pscustomobject]@{ N = 'RTX 5090 Laptop';    G = 48; V = 24 }
+)
+$newPc = $null
+$adviceUsages = @($usageRes | Where-Object { $_.Sel } | ForEach-Object { $_.U })
+if ($adviceUsages.Count -eq 0) { $adviceUsages = $targets }
+if ($adviceUsages.Count) {
+    $pAll = Get-Plan $adviceUsages $comp
+    $stillBad = @($adviceUsages | Where-Object { (Score-Usage $_ $pAll.C2) -lt 50 })
+    if ($stillBad.Count) {
+        $nd = @{ G = 0.0; V = 0.0; S = 0.0; M = 0.0; R = 16.0 }
+        foreach ($u in $adviceUsages) { foreach ($k in @('G', 'V', 'S', 'M', 'R')) { if ($u.T.ContainsKey($k) -and [double]$u.T[$k] -gt $nd[$k]) { $nd[$k] = [double]$u.T[$k] } } }
+        $aiW = @($adviceUsages | Where-Object { $_.Id -eq 9 }).Count -gt 0
+        $gpuNeeded = @($adviceUsages | Where-Object { $_.T.ContainsKey('G') -and [double]$_.T['G'] -ge 20 }).Count -gt 0
+        $pc = @{ S = 0.0; M = 0.0; G = $comp.G; V = $comp.V; R = [math]::Max(32, $nd.R); D = 95.0; Nvidia = $false; Hdd = $false }
+        $pl = $PLATFORM_NEW | Where-Object { $_.S -ge $nd.S * 0.95 -and $_.M -ge $nd.M * 0.95 } | Select-Object -First 1
+        if (-not $pl) { $pl = $PLATFORM_NEW[$PLATFORM_NEW.Count - 1] }
+        $pc.S = $pl.S; $pc.M = $pl.M; $pc.R = [math]::Max($pc.R, $pl.R)
+        $gpuTxt = 'puce graphique intégrée suffisante'; $lapGpu = $null
+        if ($gpuNeeded -or $nd.V -gt 0) {
+            $gs = $GPU_SHOP | Where-Object { $_.G -ge $nd.G -and $_.V -ge $nd.V -and ($_.Nv -or -not $aiW) } | Select-Object -First 1
+            if (-not $gs) { $gs = $GPU_SHOP[$GPU_SHOP.Count - 1] }
+            $pc.G = $gs.G; $pc.V = $gs.V; $pc.Nvidia = $gs.Nv
+            $gpuTxt = "$($gs.N) (alimentation $($gs.W) W)"
+            $lapGpu = $LAPTOP_GPU | Where-Object { $_.G -ge $nd.G * 0.85 -and $_.V -ge $nd.V } | Select-Object -First 1
+        }
+        $scores = @(); foreach ($u in $adviceUsages) { $scores += "$($u.Nom) : $(Score-Usage $u $pc)/100" }
+        $lapTxt = $(if (-not ($gpuNeeded -or $nd.V -gt 0)) { "portable avec processeur récent (Core Ultra 5 / Ryzen 5 ou mieux), $($pc.R) Go de RAM, SSD NVMe 1 To" }
+                    elseif ($lapGpu) { "portable avec $($lapGpu.N) ($($lapGpu.V) Go), processeur Core Ultra 7/9 ou Ryzen 9 série HX, $($pc.R) Go de RAM, SSD NVMe 1 à 2 To" }
+                    else { 'aucun PC portable nʼatteint ce niveau : il faut une tour.' })
+        $newPc = [pscustomobject]@{
+            Why    = ($stillBad | ForEach-Object { $_.Nom }) -join ', '
+            Tower  = "$($pl.N) ; carte graphique $gpuTxt ; SSD NVMe 2 To"
+            Laptop = $lapTxt
+            Scores = $scores -join ' ; '
+        }
+    }
+}
 
 # Recommandations finales (matériel + réglages)
 $upg = New-Object System.Collections.Generic.List[object]
 function Add-Upg([int]$prio, [string]$piece, [string]$action, [string]$gain) { $upg.Add([pscustomobject]@{ P = $prio; Piece = $piece; Action = $action; Gain = $gain }) }
 if ($gPlan) {
-    $all = $gPlan.Items
+    $all = @($gPlan.Items | Where-Object { -not $_.Fixed })
+    $fixedItems = @($gPlan.Items | Where-Object { $_.Fixed })
     $single = $gPlan.C2
     for ($i = 0; $i -lt $all.Count; $i++) {
         $it = $all[$i]
@@ -1602,7 +1655,13 @@ if ($upg.Count) {
 # =====================================================================
 $compRows = @()
 $compRows += ,@('Processeur', "$cpuName ($cores cœurs / $threads threads)", [int][math]::Round(0.4 * $S + 0.6 * $M), "1 cœur : $([int]$S)/100 - multi-cœurs : $([int]$M)/100$(if ($scaling) { " (gain mesuré x$scaling)" })$(if (-not $cpuInfo.Known) { ' - estimation' })", '100 = Ryzen 9 9950X / Core Ultra 9 285K')
-$compRows += ,@('Carte graphique', "$gpuName$(if ($hasDgpu) { " - $V Go" } else { ' (intégrée)' })", [int]$G, "$(if ($gpuScore -and $gpuOnMain) { "Mesurée : $gpuScore G ops/s, " })$(if ($gpuRes -and $gpuRes.ok) { "stable ($($gpuRes.errors) erreur), " })$(if ($gpuMaxT) { "$gpuMaxT C max, " })encodage AV1 matériel : $(if ($mainGpu -and $mainGpu.Av1) { 'oui' } else { 'non' })", '100 = RTX 5090 ; 40 = bonne carte 1440p ; 20 = carte 1080p')
+$gpuModel = "$gpuName"; if ($hasDgpu) { $gpuModel += " - $V Go" } else { $gpuModel += ' (intégrée)' }
+$gpuDetail = ''
+if ($gpuScore -and $gpuOnMain) { $gpuDetail += "Mesurée : $gpuScore G ops/s, " }
+if ($gpuRes -and $gpuRes.ok) { $gpuDetail += "stable ($($gpuRes.errors) erreur), " }
+if ($gpuMaxT) { $gpuDetail += "$gpuMaxT C max, " }
+if ($mainGpu -and $mainGpu.Av1) { $gpuDetail += 'encodage AV1 matériel : oui' } else { $gpuDetail += 'encodage AV1 matériel : non' }
+$compRows += ,@('Carte graphique', $gpuModel, [int][math]::Round($G), $gpuDetail, '100 = RTX 5090 ; 40 = bonne carte 1440p ; 20 = carte 1080p')
 $compRows += ,@('Mémoire vive', "$ramTotal Go $ramType, $channels canal(aux)$(if ($ramSoldered) { ', soudée' })", [int]$Ridx, $(if ($memBw) { "Bande passante mesurée : $memBw Go/s" } else { '' }), '100 = 64 Go double canal ; 85 = 32 Go ; 55 = 16 Go')
 $compRows += ,@('Stockage', "$(if ($sysDisk) { $sysDisk.FriendlyName } else { 'Disque C:' }) - $sysKind", [int]$D, "Écriture $writeMBs Mo/s$(if ($seqRead) { ", lecture $([int]$seqRead) Mo/s" }), $freeC Go libres$(if ($null -ne $sysWear) { ", usure $sysWear %" })", '100 = SSD NVMe rapide (> 2 500 Mo/s) avec de la place')
 $h = "<table><tr><th>Composant</th><th>Modèle</th><th style='min-width:150px'>Note</th><th>Détail</th><th>Référence</th></tr>"
@@ -1617,6 +1676,7 @@ foreach ($ur in $usageRes) {
         if ($ur.Plan -and $ur.Plan.Items.Count) {
             $todo += '<ul>' + (($ur.Plan.Items | ForEach-Object { "<li>$(Enc $_.Short)</li>" }) -join '') + '</ul>'
             if ($ur.After -gt $ur.Score) { $todo += "<b>Note estimée après : $($ur.After)/100 ($((Get-Level $ur.After).Txt))</b>" }
+            if ($ur.After -lt 50) { $todo += "<div class='small'>Même amélioré, ce PC restera insuffisant pour cet usage : voir « Faut-il changer de PC ? ».</div>" }
         }
     } else { $todo = '<span class="small">Rien à faire.</span>' }
     $name = Enc $ur.U.Nom; if ($ur.Sel) { $name = "&#11088; <b>$name</b>" }
@@ -1637,6 +1697,17 @@ else {
     }
 }
 
+# Journal des erreurs internes (aide au dépannage à distance)
+$errLog = @()
+foreach ($e in @($Error | Select-Object -First 60)) {
+    try {
+        $ln = $e.InvocationInfo.ScriptLineNumber
+        $msg = ("" + $e.Exception.Message) -replace '\s+', ' '
+        if ($msg.Length -gt 180) { $msg = $msg.Substring(0, 180) + '...' }
+        $line = "ligne $ln : $msg"
+        if ($errLog -notcontains $line) { $errLog += $line }
+    } catch {}
+}
 $alertHtml = '<ul>'
 foreach ($a in ($alerts | Sort-Object { @{ ROUGE = 0; ORANGE = 1; INFO = 2; OK = 3 }[$_.Level] })) { $alertHtml += "<li class='$($a.Level)'><b>$($a.Level)</b> - $(Enc $a.Text)</li>" }
 $alertHtml += '</ul>'
@@ -1678,11 +1749,14 @@ $usageHtml
 $compHtml
 <h2>Améliorations conseillées</h2>
 $upgHtml
+$(if ($fixedItems.Count) { "<p class='small'><b>Non améliorable sur ce PC :</b> $(Enc (($fixedItems | ForEach-Object { $_.Short }) -join ' ; ')).</p>" })
+$(if ($newPc) { "<h2>Faut-il changer de PC ?</h2><div class='banner r'>Même avec toutes les améliorations possibles, ce PC restera insuffisant pour : $(Enc $newPc.Why).</div><table><tr><th>Configuration conseillée (tour)</th><td>$(Enc $newPc.Tower)</td></tr><tr><th>Équivalent en PC portable</th><td>$(Enc $newPc.Laptop)</td></tr><tr><th>Notes estimées avec ce PC</th><td>$(Enc $newPc.Scores)</td></tr></table>" })
 $(if ($extRes) { "<h2>Clé / disque externe testé ($(Enc $extRes.Letter): $(Enc $extRes.Label))</h2><div class='banner $($extRes.Cls)'>$(Enc $extRes.Verdict)</div><p class='small'>Annoncé : $($extRes.Announced) Go - testé : $($extRes.Tested) Go - zones défectueuses : $($extRes.Bad) Go - écriture $($extRes.Write) Mo/s, lecture $($extRes.Read) Mo/s</p>" })
 <h2>Santé : points relevés</h2>
 $alertHtml
 <details><summary>Détails techniques</summary>
 $($sections -join "`n")
+$(if ($errLog.Count) { "<h3>Journal technique (pour Claude)</h3><pre>$(Enc ($errLog -join "`n"))</pre>" })
 </details>
 <h2>À compléter à la main</h2><ul>
 $(if (-not ($gpuRes -and $gpuRes.ok)) { '<li>Carte graphique : le test intégré nʼa pas pu se faire ; lancer OCCT (dossier OCCT), test « 3D Adaptive » 10 min, vérifier 0 erreur et GPU &lt; 85 °C.</li>' } else { '<li>Carte graphique : pour un test de stabilité plus long (30 min), OCCT « 3D Adaptive ».</li>' })
@@ -1713,8 +1787,10 @@ $sum += "TEST PROCESSEUR : 1 cœur $mono pts | multi $multi pts | gain x$scaling
 if ($extRes) { $sum += "DISQUE EXTERNE $($extRes.Letter): : $($extRes.Verdict) (écriture $($extRes.Write) Mo/s, lecture $($extRes.Read) Mo/s)" }
 $sum += ''; $sum += 'POINTS RELEVÉS :'
 foreach ($a in ($alerts | Sort-Object { @{ ROUGE = 0; ORANGE = 1; INFO = 2; OK = 3 }[$_.Level] })) { $sum += " [$($a.Level)] $($a.Text)" }
+if ($newPc) { $sum += ''; $sum += "FAUT-IL CHANGER DE PC ? Oui pour : $($newPc.Why)"; $sum += " Tour : $($newPc.Tower)"; $sum += " Portable : $($newPc.Laptop)"; $sum += " Notes estimées : $($newPc.Scores)" }
 $sum += ''; $sum += 'AMÉLIORATIONS CONSEILLÉES :'
 foreach ($x in ($upg | Sort-Object P)) { $sum += " [Priorité $($x.P)] $($x.Piece) : $($x.Action) => $($x.Gain)" }
+if ($errLog.Count) { $sum += ''; $sum += 'JOURNAL TECHNIQUE (pour Claude) :'; $sum += ($errLog | Select-Object -First 30) }
 $sum | Out-File -FilePath $txtPath -Encoding UTF8
 
 Write-Host ''
